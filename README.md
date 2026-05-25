@@ -102,3 +102,8 @@ python run_pipeline.py
 
 ## 주의 사항
 * 본 프로젝트는 비공개 API인 Statiz API를 호출합니다. 승인되지 않은 환경에서 대량의 무단 호출을 지양하며, 로컬 환경에서 재현 테스트 시에는 `data/sample/` 디렉터리에 포함된 샘플 데이터를 `data/raw/` 및 하위 폴더에 복사하여 구조를 확인한 후 진행하시는 것을 권장합니다.
+
+## Contributors
+본 프로젝트의 설계 및 구현에 참여한 기여자입니다.
+* **[김민상(alt-f4-guy)](https://github.com/alt-f4-guy)** - 머신러닝 예측 모델링 및 시계열 백테스트 설계
+* **[류환진(Ryuhwanjin)](https://github.com/Ryuhwanjin)** - 데이터 수집 파이프라인 구축 및 데이터 가공
