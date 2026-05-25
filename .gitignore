@@ -1,0 +1,28 @@
+# API secrets
+.env
+
+# Python Cache
+__pycache__/
+*.pyc
+
+# OS files
+.DS_Store
+
+# Datasets (Exclude real raw/processed data)
+data/raw/*
+data/processed/*
+data/final/*
+
+# Exceptions for gitkeep/placeholder structure
+!data/raw/.gitkeep
+!data/processed/.gitkeep
+!data/final/.gitkeep
+
+# Sample datasets to keep in git
+!data/sample/
+
+# Output files & logs
+catboost_info/
+*.csv
+!data/sample/**/*.csv
+!data/sample/*.csv

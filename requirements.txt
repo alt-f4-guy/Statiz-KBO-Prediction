@@ -1,0 +1,8 @@
+python-dotenv
+requests
+pandas
+numpy
+rich
+catboost
+scikit-learn
+optuna
