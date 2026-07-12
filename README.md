@@ -8,16 +8,17 @@ Statiz API를 활용하여 KBO 프로야구 데이터를 수집하고, 선수 �
 
 ## 기술 스택
 * 언어: Python 3.14
-* 주요 라이브러리: Pandas, NumPy, Scikit-learn, XGBoost, LightGBM, CatBoost, Optuna, Requests, python-dotenv, Rich
+* 주요 라이브러리: Pandas, NumPy, Scikit-learn, LightGBM, CatBoost, Optuna, Requests, python-dotenv, Rich
 
 ## 모델 설계 및 예측 방법론
 본 프로젝트는 양 팀의 예상 득점(Score)을 개별적으로 예측하고 이를 통계적으로 연산하여 최종 승패 확률을 추론하는 구조를 가집니다.
 
-### 1. 개별 득점 모델링 (Poisson Regression)
-야구 경기 득점은 정수형 카운트 데이터이며 단기간 내 발생하는 사건이라는 특성을 가집니다. 이를 반영하기 위해 포아송(Poisson) 분포를 목적 함수로 하는 회귀 모델을 구성하여 홈팀 득점(homeScore)과 원정팀 득점(awayScore)을 각각 예측합니다.
+### 1. 개별 득점 모델링 (Poisson Regression 및 ML 예측 모델링)
+야구 경기 득점은 정수형 카운트 데이터이며 단기간 내 발생하는 사건이라는 특성을 가집니다. 이를 반영하기 위해 포아송(Poisson) 분포 또는 정밀한 머신러닝 회귀 모델을 구성하여 홈팀 득점(homeScore)과 원정팀 득점(awayScore)을 각각 예측합니다.
 * **CatBoost Regressor**: 범주형 특성(홈/원정 팀 코드) 간의 관계를 효과적으로 학습하며 Poisson 손실 함수를 사용하여 점수를 추정합니다.
-* **XGBoost Regressor**: 결측치 처리와 대규모 피처 연산에 유리한 히스토그램 트리 빌더 모델로, count:poisson 목적 함수를 사용합니다.
 * **LightGBM Regressor**: 리프 중심(Leaf-wise) 트리 분할 방식으로 미세한 비선형 관계를 학습하며 poisson 목적 함수로 학습을 진행합니다.
+* **Random Forest Regressor**: 다수의 의사결정나무를 앙상블(Bagging)하여 분산을 감소시키고 모델의 일반화 성능을 견고하게 보완합니다.
+* **SVR (Support Vector Regressor)**: RBF 커널을 통해 고차원 공간에서의 유연한 비선형 회귀선(경계)을 도출하여 데이터셋의 규모에 제약을 덜 받으면서도 강인한 정규화 성능을 보입니다.
 * **Ridge Regression**: 선형 제약을 통해 규제를 가함으로써 트리 모델들의 과적합을 방지하고 일반화 성능을 보완합니다.
 
 ### 2. 가중치 학습 (Sample Weight)
