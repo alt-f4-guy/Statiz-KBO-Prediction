@@ -6,6 +6,7 @@ from rich.console import Console
 from rich.table import Table
 from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, TimeElapsedColumn
 from pipeline_config import RAW_DATA_DIR, load_api_credentials
+from io_utils import atomic_to_csv
 from statiz_api import StatizAPI, StatizAPIError
 
 console = Console()
@@ -69,14 +70,55 @@ def run_schedule_collection():
         new_df['leagueType'] = new_df['leagueType'].astype(str)
         new_df = new_df[new_df['leagueType'] == '10100']
         
+        fetched_at = pd.Timestamp.now(tz="Asia/Seoul").isoformat()
         if not existing_df.empty:
+            if "result_observed_at" not in existing_df.columns:
+                existing_df["result_observed_at"] = pd.NA
+            previous = existing_df[
+                ["s_no", "homeScore", "awayScore", "result_observed_at"]
+            ].rename(
+                columns={
+                    "homeScore": "_previous_home_score",
+                    "awayScore": "_previous_away_score",
+                    "result_observed_at": "_previous_result_observed_at",
+                }
+            )
+            previous["_known_before"] = True
+            new_df = new_df.merge(previous, on="s_no", how="left")
+            current_scored = (
+                new_df["homeScore"].notna() & new_df["awayScore"].notna()
+            )
+            previous_scored = (
+                new_df["_previous_home_score"].notna()
+                & new_df["_previous_away_score"].notna()
+            )
+            transitioned = (
+                new_df["_known_before"].fillna(False)
+                & current_scored
+                & ~previous_scored
+            )
+            new_df["result_observed_at"] = new_df["_previous_result_observed_at"]
+            new_df.loc[
+                transitioned & new_df["result_observed_at"].isna(),
+                "result_observed_at",
+            ] = fetched_at
+            new_df.drop(
+                columns=[
+                    "_previous_home_score",
+                    "_previous_away_score",
+                    "_previous_result_observed_at",
+                    "_known_before",
+                ],
+                inplace=True,
+            )
             combined_df = pd.concat([existing_df, new_df], ignore_index=True)
         else:
+            new_df["result_observed_at"] = pd.NA
             combined_df = new_df
-            
-        combined_df = combined_df.drop_duplicates(subset=['s_no'], keep='last')
-        combined_df = combined_df.sort_values(['s_no']).reset_index(drop=True)
-        combined_df.to_csv(output_file, index=False, encoding='utf-8-sig')
+
+        combined_df = combined_df.drop_duplicates(subset=["s_no"], keep="last")
+        combined_df = combined_df.sort_values(["s_no"]).reset_index(drop=True)
+        atomic_to_csv(combined_df, output_file)
         
         # 결과 요약 테이블
         summary = Table(show_header=True, header_style="bold magenta")

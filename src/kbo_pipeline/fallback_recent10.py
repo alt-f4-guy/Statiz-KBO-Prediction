@@ -11,14 +11,15 @@ def _team_recent_games(
     team: int,
     cutoff: pd.Timestamp,
 ) -> pd.DataFrame:
-    time = pd.to_datetime(history["game_datetime"], errors="coerce", utc=True)
+    time = pd.to_datetime(history["result_available_datetime"], errors="coerce", utc=True)
     cutoff_utc = pd.to_datetime(cutoff, utc=True)
     completed = history["homeScore"].notna() & history["awayScore"].notna()
     involved = history["homeTeam"].eq(team) | history["awayTeam"].eq(team)
+    sort_cols = ["_avail_datetime", "s_no"] if "s_no" in history.columns else ["_avail_datetime"]
     return (
         history.loc[completed & involved & time.lt(cutoff_utc)]
-        .assign(_game_datetime=time.loc[completed & involved & time.lt(cutoff_utc)])
-        .sort_values("_game_datetime")
+        .assign(_avail_datetime=time.loc[completed & involved & time.lt(cutoff_utc)])
+        .sort_values(sort_cols)
         .tail(10)
     )
 
@@ -46,6 +47,7 @@ def recent_ten_home_probability(
 
     required = {
         "game_datetime",
+        "result_available_datetime",
         "homeTeam",
         "awayTeam",
         "homeScore",
@@ -79,6 +81,7 @@ def backtest_recent_ten(
         "s_no",
         "game_datetime",
         "feature_cutoff_datetime",
+        "result_available_datetime",
         "homeTeam",
         "awayTeam",
         "homeScore",
@@ -95,10 +98,14 @@ def backtest_recent_ten(
     frame["feature_cutoff_datetime"] = pd.to_datetime(
         frame["feature_cutoff_datetime"], errors="coerce", utc=True
     )
+    frame["result_available_datetime"] = pd.to_datetime(
+        frame["result_available_datetime"], errors="coerce", utc=True
+    )
     frame = frame.dropna(
         subset=[
             "game_datetime",
             "feature_cutoff_datetime",
+            "result_available_datetime",
             "homeScore",
             "awayScore",
         ]
@@ -106,7 +113,7 @@ def backtest_recent_ten(
     home_win = frame["homeScore"].gt(frame["awayScore"])
     away_win = frame["awayScore"].gt(frame["homeScore"])
 
-    common = ["s_no", "game_datetime"]
+    common = ["s_no", "result_available_datetime"]
     home_events = frame[common + ["homeTeam"]].rename(
         columns={"homeTeam": "team"}
     )
@@ -116,7 +123,7 @@ def backtest_recent_ten(
     )
     away_events["team_win"] = away_win.astype(int).to_numpy()
     events = pd.concat([home_events, away_events], ignore_index=True).sort_values(
-        ["team", "game_datetime", "s_no"]
+        ["team", "result_available_datetime", "s_no"]
     )
     grouped = events.groupby("team", sort=False)
     events["recent_games"] = (
@@ -141,12 +148,12 @@ def backtest_recent_ten(
 
     def merge_team_requests(requests: pd.DataFrame) -> pd.DataFrame:
         left = requests.sort_values(["feature_cutoff_datetime", "team"])
-        right = events.sort_values(["game_datetime", "team"])
+        right = events.sort_values(["result_available_datetime", "s_no", "team"])
         return pd.merge_asof(
             left,
-            right[["team", "game_datetime", "recent_games", "recent_wins"]],
+            right[["team", "result_available_datetime", "recent_games", "recent_wins"]],
             left_on="feature_cutoff_datetime",
-            right_on="game_datetime",
+            right_on="result_available_datetime",
             by="team",
             direction="backward",
             allow_exact_matches=False,
@@ -158,9 +165,9 @@ def backtest_recent_ten(
     # 동일 시각 경기 결과가 리그 사전값에 들어가지 않도록 시각별로 누적한다.
     time_events = (
         frame.assign(home_win=home_win.astype(int))
-        .groupby("game_datetime", as_index=False)
+        .groupby("result_available_datetime", as_index=False)
         .agg(games=("s_no", "size"), home_wins=("home_win", "sum"))
-        .sort_values("game_datetime")
+        .sort_values("result_available_datetime")
     )
     time_events["cum_games"] = time_events["games"].cumsum()
     time_events["cum_home_wins"] = time_events["home_wins"].cumsum()
@@ -169,16 +176,17 @@ def backtest_recent_ten(
             "feature_cutoff_datetime"
         ),
         time_events[
-            ["game_datetime", "cum_games", "cum_home_wins"]
-        ].sort_values("game_datetime"),
+            ["result_available_datetime", "cum_games", "cum_home_wins"]
+        ].sort_values("result_available_datetime"),
         left_on="feature_cutoff_datetime",
-        right_on="game_datetime",
+        right_on="result_available_datetime",
         direction="backward",
         allow_exact_matches=False,
     ).sort_values("s_no")
     league_rate = (
         league["cum_home_wins"] / league["cum_games"].replace(0, np.nan)
     ).fillna(0.5)
+
 
     home_games = home_recent["recent_games"].fillna(0).to_numpy()
     away_games = away_recent["recent_games"].fillna(0).to_numpy()

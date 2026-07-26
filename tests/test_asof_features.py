@@ -94,6 +94,9 @@ class AsofFeatureTests(unittest.TestCase):
                 "game_datetime": pd.to_datetime(
                     ["2026-04-01T18:30:00+09:00"], utc=True
                 ),
+                "result_available_datetime": pd.to_datetime(
+                    ["2026-04-01T22:30:00+09:00"], utc=True
+                ),
                 "year": [2026],
             }
         )
@@ -110,6 +113,117 @@ class AsofFeatureTests(unittest.TestCase):
         pitching, _ = _prepare_events(day, games)
 
         self.assertEqual(pitching.loc[0, "year"], 2026)
+
+    def test_zero_walk_bullpen_kbb_distinguishes_strikeouts(self):
+        from feature_matrix_v9 import _bounded_kbb
+
+        result = _bounded_kbb(
+            pd.Series([5.0, 0.0, 8.0]),
+            pd.Series([0.0, 0.0, 2.0]),
+        )
+
+        self.assertEqual(result.tolist(), [10.0, 2.0, 4.0])
+
+    def test_future_events_do_not_alter_past_features(self):
+        from feature_matrix_v9 import _build_prior_constants, _build_asof_constants
+
+        games = pd.DataFrame(
+            {
+                "s_no": [1, 2],
+                "year": [2026, 2026],
+                "feature_cutoff_datetime": pd.to_datetime(
+                    [
+                        "2026-04-02T18:29:59+09:00",
+                        "2026-04-03T18:29:59+09:00",
+                    ],
+                    utc=True,
+                ),
+            }
+        )
+        pitching = pd.DataFrame(
+            {
+                "year": [2026, 2026],
+                "event_datetime": pd.to_datetime(
+                    [
+                        "2026-04-01T18:30:00+09:00",
+                        "2026-04-03T18:30:00+09:00",
+                    ],
+                    utc=True,
+                ),
+                "IP": [9.0, 9.0],
+                "ER": [3.0, 99.0],
+                "HR": [1.0, 20.0],
+                "BB": [2.0, 30.0],
+                "HP": [0.0, 10.0],
+                "SO": [8.0, 0.0],
+            }
+        )
+        batting = pd.DataFrame(
+            {
+                "year": [2026, 2026],
+                "event_datetime": pitching["event_datetime"],
+                "R": [4.0, 99.0],
+                "PA": [36.0, 36.0],
+            }
+        )
+
+        prior = _build_prior_constants(pitching, batting)
+        orig_asof = _build_asof_constants(games, pitching, batting, prior)
+
+        changed_pitching = pitching.copy()
+        changed_batting = batting.copy()
+        changed_pitching.loc[1, ["ER", "HR", "BB"]] = [0.0, 0.0, 0.0]
+        changed_batting.loc[1, "R"] = 0.0
+        rev_asof = _build_asof_constants(games, changed_pitching, changed_batting, prior)
+
+        pd.testing.assert_series_equal(
+            orig_asof.loc[0],
+            rev_asof.loc[0],
+            check_names=False,
+        )
+
+    def test_result_available_datetime_boundaries(self):
+        from feature_matrix_v9 import _prepare_events
+        from game_time import build_game_datetime_reference
+
+        games = pd.DataFrame(
+            {
+                "s_no": [1, 2, 3],
+                "gameDate": [1680325200, 1680325200, 1680325200],
+                "gameDateResume": [0, 0, 1680411600],
+                "result_observed_at": ["2023-01-01T18:15:00+09:00", pd.NA, pd.NA],
+                "homeScore": [3, 4, 5],
+                "awayScore": [1, 2, 3],
+                "year": [2023, 2023, 2023],
+            }
+        )
+        ref = build_game_datetime_reference(games)
+        ref["year"] = 2023
+
+        day = pd.DataFrame(
+            {
+                "s_no_key": [1, 2, 3],
+                "p_no": [10, 11, 12],
+                "year_req": [2023, 2023, 2023],
+                "IP": [1.0, 1.0, 1.0],
+                "PA": [pd.NA, pd.NA, pd.NA],
+            }
+        )
+
+        pitching, _ = _prepare_events(day, ref)
+
+        self.assertEqual(
+            pitching.loc[pitching["s_no_key"] == 1, "event_datetime"].iloc[0].isoformat(),
+            "2023-01-01T18:15:00+09:00",
+        )
+        self.assertEqual(
+            pitching.loc[pitching["s_no_key"] == 2, "event_datetime"].iloc[0].isoformat(),
+            "2023-04-02T00:00:00+09:00",
+        )
+        self.assertEqual(
+            pitching.loc[pitching["s_no_key"] == 3, "event_datetime"].iloc[0].isoformat(),
+            "2023-04-03T00:00:00+09:00",
+        )
 
 
 if __name__ == "__main__":

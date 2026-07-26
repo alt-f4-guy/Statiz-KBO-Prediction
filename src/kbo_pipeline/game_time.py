@@ -19,6 +19,36 @@ def _unix_to_seoul(values: pd.Series) -> pd.Series:
     )
 
 
+def build_result_available_datetime(games: pd.DataFrame) -> pd.Series:
+    """결과가 예측 입력으로 사용 가능한 최초 시각을 반환한다."""
+
+    game_time = _unix_to_seoul(games["gameDate"])
+    observed = pd.to_datetime(
+        games.get(
+            "result_observed_at",
+            pd.Series(pd.NaT, index=games.index),
+        ),
+        errors="coerce",
+        utc=True,
+    ).dt.tz_convert(SEOUL_TIMEZONE)
+    resume = _unix_to_seoul(
+        games.get(
+            "gameDateResume",
+            pd.Series(0, index=games.index),
+        ).replace(0, np.nan)
+    )
+    legacy_reference = resume.fillna(game_time)
+    legacy_available = (
+        legacy_reference.dt.normalize()
+        + pd.Timedelta(days=1)
+    )
+    if "homeScore" in games.columns and "awayScore" in games.columns:
+        scored = games["homeScore"].notna() & games["awayScore"].notna()
+    else:
+        scored = pd.Series(False, index=games.index)
+    return observed.fillna(legacy_available).where(scored)
+
+
 def build_game_datetime_reference(games: pd.DataFrame) -> pd.DataFrame:
     """원래 경기 시작 시각을 기준으로 누수 없는 피처 마감 시각을 만든다."""
 
@@ -36,6 +66,7 @@ def build_game_datetime_reference(games: pd.DataFrame) -> pd.DataFrame:
     result["game_calendar_date"] = result["game_datetime"].dt.normalize()
     epsilon = pd.Timedelta(microseconds=1)
     result["feature_cutoff_datetime"] = result["game_datetime"] - epsilon
+    result["result_available_datetime"] = build_result_available_datetime(result)
 
     # 같은 날짜·대진의 복수 경기는 모두 첫 경기 시작 직전 상태로 고정한다.
     if {"homeTeam", "awayTeam"}.issubset(result.columns):
@@ -59,6 +90,7 @@ def build_game_datetime_reference(games: pd.DataFrame) -> pd.DataFrame:
         "s_no",
         "game_datetime",
         "feature_cutoff_datetime",
+        "result_available_datetime",
         "game_calendar_date",
     ]
     if "gameDateResume" in result.columns:
@@ -69,6 +101,7 @@ def build_game_datetime_reference(games: pd.DataFrame) -> pd.DataFrame:
     return result[columns].sort_values(["game_datetime", "s_no"]).reset_index(
         drop=True
     )
+
 
 
 def save_game_datetime_reference(games_path: Path, output_path: Path) -> pd.DataFrame:

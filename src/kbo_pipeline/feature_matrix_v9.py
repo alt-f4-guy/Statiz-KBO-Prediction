@@ -11,7 +11,9 @@ from asof_features import mark_bullpen_candidates
 from dataset_contract import build_feature_coverage, validate_final_dataset
 from game_time import build_game_datetime_reference
 from sabermetrics import (
+    BASE_LINEAR_WEIGHTS,
     add_batting_environment,
+    calculate_asof_kbo_constants,
     calculate_asof_park_factor,
     calculate_kbo_year_constants,
 )
@@ -115,8 +117,8 @@ def _prepare_events(
     day: pd.DataFrame,
     games: pd.DataFrame,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    reference = games[["s_no", "game_datetime", "year"]].rename(
-        columns={"s_no": "s_no_key", "game_datetime": "event_datetime"}
+    reference = games[["s_no", "result_available_datetime", "year"]].rename(
+        columns={"s_no": "s_no_key", "result_available_datetime": "event_datetime"}
     )
     events = day.copy()
     events["s_no_key"] = pd.to_numeric(events["s_no_key"], errors="coerce")
@@ -151,14 +153,40 @@ def _prepare_events(
     return pitching.reset_index(drop=True), batting.reset_index(drop=True)
 
 
-def _build_constants(
+def _build_prior_constants(
     pitching: pd.DataFrame,
     batting: pd.DataFrame,
 ) -> pd.DataFrame:
-    pitching_for_constants = pitching.rename(columns={"year": "year"})
-    constants = calculate_kbo_year_constants(pitching_for_constants)
-    batting_for_constants = batting.rename(columns={"year": "year"})
-    return add_batting_environment(constants, batting_for_constants)
+    constants = calculate_kbo_year_constants(pitching)
+    return add_batting_environment(constants, batting)
+
+
+def _build_asof_constants(
+    games: pd.DataFrame,
+    pitching: pd.DataFrame,
+    batting: pd.DataFrame,
+    prior_constants: pd.DataFrame,
+) -> pd.DataFrame:
+    current = calculate_asof_kbo_constants(games, pitching, batting)
+    previous = prior_constants.copy()
+    previous["year"] = previous["year"] + 1
+    fallback_columns = [
+        "league_era",
+        "fip_constant",
+        "league_runs_per_pa",
+        *BASE_LINEAR_WEIGHTS,
+    ]
+    current = current.merge(
+        previous[["year", *fallback_columns]],
+        on="year",
+        how="left",
+        suffixes=("", "_prior"),
+    )
+    for column in fallback_columns:
+        current[column] = current[column].fillna(current[f"{column}_prior"])
+    return current.drop(
+        columns=[f"{column}_prior" for column in fallback_columns]
+    )
 
 
 def _prior_pitcher_table(
@@ -229,8 +257,8 @@ def _pitcher_shrunk_features(
     result = _merge_asof_by_player_year(requests, pitching, current_columns)
     result = result.merge(prior_pitcher, on=["p_no", "year"], how="left")
     result = result.merge(
-        constants[["year", "fip_constant", "league_era"]],
-        on="year",
+        constants[["s_no", "year", "fip_constant", "league_era"]],
+        on=["s_no", "year"],
         how="left",
     )
     current_ip = result["current_ip"].fillna(0)
@@ -432,7 +460,8 @@ def _batter_features(
     lineups: pd.DataFrame,
     batting: pd.DataFrame,
     season: pd.DataFrame,
-    constants: pd.DataFrame,
+    prior_constants: pd.DataFrame,
+    asof_constants: pd.DataFrame,
 ) -> pd.DataFrame:
     lineup = lineups.copy()
     lineup["p_no"] = pd.to_numeric(lineup["p_no"], errors="coerce")
@@ -451,11 +480,11 @@ def _batter_features(
     cumulative_columns = [f"current_{column.lower()}" for column in BATTING_COLUMNS]
     result = _merge_asof_by_player_year(requests, batting, cumulative_columns)
     result = result.merge(
-        _prior_batter_table(season, constants),
+        _prior_batter_table(season, prior_constants),
         on=["p_no", "year"],
         how="left",
-    ).merge(_league_batting_priors(season, constants), on="year", how="left")
-    result = result.merge(constants, on="year", how="left", suffixes=("", "_year"))
+    ).merge(_league_batting_priors(season, prior_constants), on="year", how="left")
+    result = result.merge(asof_constants, on=["s_no", "year"], how="left", suffixes=("", "_year"))
 
     pa = result["current_pa"].fillna(0)
     ab = result["current_ab"].fillna(0)
@@ -527,6 +556,21 @@ def _batter_features(
     return aggregated.drop(columns=["current_count", "prior_count"])
 
 
+def _bounded_kbb(
+    strikeouts: pd.Series,
+    walks: pd.Series,
+) -> pd.Series:
+    """볼넷이 0인 경우에도 의미 있는 K/BB 비율을 반환한다."""
+    so = pd.to_numeric(strikeouts, errors="coerce").fillna(0)
+    bb = pd.to_numeric(walks, errors="coerce").fillna(0)
+    ratio = np.select(
+        [bb.gt(0), so.gt(0)],
+        [so / bb.where(bb.gt(0), 1.0), 10.0],
+        default=2.0,
+    )
+    return pd.Series(ratio, index=so.index, dtype=float).clip(0.25, 10.0)
+
+
 def _bullpen_features(
     games: pd.DataFrame,
     rosters: pd.DataFrame,
@@ -579,8 +623,8 @@ def _bullpen_features(
     ].replace(0, np.nan)
     base = _team_game_rows(games)[["s_no", "side", "year"]]
     grouped = base.merge(grouped, on=["s_no", "side"], how="left").merge(
-        constants[["year", "fip_constant", "league_era"]],
-        on="year",
+        constants[["s_no", "year", "fip_constant", "league_era"]],
+        on=["s_no", "year"],
         how="left",
     )
     current_ip = grouped["current_ip"].fillna(0)
@@ -596,9 +640,6 @@ def _bullpen_features(
     current_era = grouped["current_er"].fillna(0) * 9 / current_ip.replace(
         0, np.nan
     )
-    current_kbb = grouped["current_so"].fillna(0) / grouped[
-        "current_bb"
-    ].fillna(0).replace(0, np.nan)
     prior_ip = grouped["prior_ip"].fillna(0)
     current_weight = current_ip / (current_ip + 40.0)
     prior_weight = (1 - current_weight) * prior_ip / (prior_ip + 80.0)
@@ -613,7 +654,10 @@ def _bullpen_features(
         current_weight * current_era.fillna(grouped["league_era"])
         + (1 - current_weight) * grouped["league_era"]
     )
-    grouped["rp_k_bb"] = current_kbb.fillna(2.0).clip(0.25, 10.0)
+    grouped["rp_k_bb"] = _bounded_kbb(
+        grouped["current_so"].fillna(0),
+        grouped["current_bb"].fillna(0),
+    )
     grouped["rp_source"] = np.select(
         [current_ip.ge(10), prior_ip.gt(0)],
         ["current_season", "prior_season"],
@@ -754,22 +798,24 @@ def build_feature_matrix_v9(
 
     game_rows = _prepare_games(games, include_unscored=include_unscored)
     pitching, batting = _prepare_events(day, game_rows)
-    constants = _build_constants(pitching, batting)
-    prior_pitcher = _prior_pitcher_table(season, constants)
+    prior_constants = _build_prior_constants(pitching, batting)
+    asof_constants = _build_asof_constants(game_rows, pitching, batting, prior_constants)
+    prior_pitcher = _prior_pitcher_table(season, prior_constants)
 
     starters = _starter_features(
         game_rows,
         lineups,
         pitching,
         prior_pitcher,
-        constants,
+        asof_constants,
     )
     batters = _batter_features(
         game_rows,
         lineups,
         batting,
         season,
-        constants,
+        prior_constants,
+        asof_constants,
     )
     bullpen = _bullpen_features(
         game_rows,
@@ -777,7 +823,7 @@ def build_feature_matrix_v9(
         starters,
         pitching,
         prior_pitcher,
-        constants,
+        asof_constants,
     )
     fatigue = _bullpen_fatigue(game_rows, pitching)
 
@@ -841,7 +887,7 @@ def build_feature_matrix_v9(
     )
 
     # 정의가 있는 사전값만 열별로 보완하고 결측 여부는 별도 열로 보존한다.
-    league_era = data["year"].map(constants.set_index("year")["league_era"])
+    league_era = data["s_no"].map(asof_constants.set_index("s_no")["league_era"])
     for side in ("home", "away"):
         data[f"{side}_sp_missing"] = data[f"{side}_sp_missing"].fillna(True)
         data[f"{side}_rp_missing"] = data[f"{side}_rp_missing"].fillna(True)
@@ -891,4 +937,4 @@ def build_feature_matrix_v9(
 
     if not include_unscored:
         validate_final_dataset(data)
-    return data, build_feature_coverage(data), constants
+    return data, build_feature_coverage(data), prior_constants

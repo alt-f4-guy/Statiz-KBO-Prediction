@@ -65,6 +65,35 @@ class GameDatetimeTests(unittest.TestCase):
         expected = result.loc[0, "game_datetime"] - pd.Timedelta(microseconds=1)
         self.assertEqual(result.loc[0, "feature_cutoff_datetime"], expected)
 
+    def test_result_available_datetime_contracts(self):
+        from game_time import build_game_datetime_reference
+
+        games = pd.DataFrame(
+            {
+                "s_no": [1, 2, 3],
+                "gameDate": [1680325200, 1680325200, 1680325200],
+                "gameDateResume": [0, 0, 1680411600],
+                "result_observed_at": ["2023-04-01T18:15:00+09:00", pd.NA, pd.NA],
+                "homeScore": [3, 4, 5],
+                "awayScore": [1, 2, 3],
+            }
+        )
+
+        result = build_game_datetime_reference(games)
+
+        self.assertEqual(
+            result.loc[0, "result_available_datetime"].isoformat(),
+            "2023-04-01T18:15:00+09:00",
+        )
+        self.assertEqual(
+            result.loc[1, "result_available_datetime"].isoformat(),
+            "2023-04-02T00:00:00+09:00",
+        )
+        self.assertEqual(
+            result.loc[2, "result_available_datetime"].isoformat(),
+            "2023-04-03T00:00:00+09:00",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
