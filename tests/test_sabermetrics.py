@@ -41,6 +41,22 @@ class SabermetricsTests(unittest.TestCase):
                         "2026-04-03T18:30:00+09:00",
                     ]
                 ),
+                "feature_cutoff_datetime": pd.to_datetime(
+                    [
+                        "2026-04-01T18:29:59+09:00",
+                        "2026-04-02T18:29:59+09:00",
+                        "2026-04-03T18:29:59+09:00",
+                    ],
+                    utc=True,
+                ),
+                "result_available_datetime": pd.to_datetime(
+                    [
+                        "2026-04-01T22:00:00+09:00",
+                        "2026-04-02T22:00:00+09:00",
+                        "2026-04-03T22:00:00+09:00",
+                    ],
+                    utc=True,
+                ),
                 "s_code": [1001, 1001, 1001],
                 "homeScore": [5, 4, 99],
                 "awayScore": [3, 2, 99],
@@ -53,6 +69,51 @@ class SabermetricsTests(unittest.TestCase):
         revised = calculate_asof_park_factor(changed)
 
         self.assertEqual(original.loc[1, "park_factor"], revised.loc[1, "park_factor"])
+
+    def test_park_factor_requires_result_availability_before_cutoff(self):
+        # 시작했지만 아직 끝나지 않은 경기 점수가 뒤 경기 피처에 들어가는 누수를 막는다.
+        from sabermetrics import calculate_asof_park_factor
+
+        games = pd.DataFrame(
+            {
+                "s_no": [1, 2, 3],
+                "game_datetime": pd.to_datetime(
+                    [
+                        "2026-04-01T18:30:00+09:00",
+                        "2026-04-02T14:00:00+09:00",
+                        "2026-04-02T17:00:00+09:00",
+                    ],
+                    utc=True,
+                ),
+                "feature_cutoff_datetime": pd.to_datetime(
+                    [
+                        "2026-04-01T18:29:59+09:00",
+                        "2026-04-02T13:59:59+09:00",
+                        "2026-04-02T16:59:59+09:00",
+                    ],
+                    utc=True,
+                ),
+                "result_available_datetime": pd.to_datetime(
+                    [
+                        "2026-04-01T22:00:00+09:00",
+                        "2026-04-02T18:00:00+09:00",
+                        "2026-04-02T21:00:00+09:00",
+                    ],
+                    utc=True,
+                ),
+                "s_code": [100, 200, 100],
+                "homeScore": [5, 1, 3],
+                "awayScore": [5, 0, 2],
+            }
+        )
+        changed = games.copy()
+        changed.loc[1, ["homeScore", "awayScore"]] = [100, 0]
+
+        original = calculate_asof_park_factor(games).set_index("s_no")
+        revised = calculate_asof_park_factor(changed).set_index("s_no")
+
+        self.assertAlmostEqual(original.loc[3, "park_factor"], 1.0)
+        self.assertAlmostEqual(revised.loc[3, "park_factor"], 1.0)
 
     def test_first_available_year_has_explicit_league_batting_prior(self):
         # 이전 시즌 파일이 없는 첫 학습 연도의 타격 피처 전체 결측을 막는다.

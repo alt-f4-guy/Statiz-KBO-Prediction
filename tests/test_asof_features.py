@@ -182,6 +182,53 @@ class AsofFeatureTests(unittest.TestCase):
             check_names=False,
         )
 
+    def test_first_year_asof_constants_use_explicit_league_prior(self):
+        # 이전 시즌과 완료 경기 기록이 모두 없는 최초 경기의 핵심 피처 결측을 막는다.
+        from feature_matrix_v9 import _build_asof_constants, _build_prior_constants
+
+        games = pd.DataFrame(
+            {
+                "s_no": [1],
+                "year": [2023],
+                "feature_cutoff_datetime": pd.to_datetime(
+                    ["2023-04-01T13:59:59+09:00"],
+                    utc=True,
+                ),
+            }
+        )
+        pitching = pd.DataFrame(
+            {
+                "year": [2023],
+                "event_datetime": pd.to_datetime(
+                    ["2023-04-02T00:00:00+09:00"],
+                    utc=True,
+                ),
+                "IP": [9.0],
+                "ER": [4.0],
+                "HR": [1.0],
+                "BB": [2.0],
+                "HP": [0.0],
+                "SO": [8.0],
+            }
+        )
+        batting = pd.DataFrame(
+            {
+                "year": [2023],
+                "event_datetime": pitching["event_datetime"],
+                "R": [5.0],
+                "PA": [40.0],
+            }
+        )
+        prior = _build_prior_constants(pitching, batting)
+
+        result = _build_asof_constants(games, pitching, batting, prior).iloc[0]
+
+        self.assertAlmostEqual(result["league_era"], 4.50)
+        self.assertAlmostEqual(result["fip_constant"], 3.10)
+        self.assertAlmostEqual(result["league_runs_per_pa"], 0.115)
+        self.assertAlmostEqual(result["weight_bb"], 0.69)
+        self.assertAlmostEqual(result["weight_hr"], 2.031)
+
     def test_result_available_datetime_boundaries(self):
         from feature_matrix_v9 import _prepare_events
         from game_time import build_game_datetime_reference

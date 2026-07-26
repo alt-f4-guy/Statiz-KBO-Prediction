@@ -12,6 +12,9 @@ from dataset_contract import build_feature_coverage, validate_final_dataset
 from game_time import build_game_datetime_reference
 from sabermetrics import (
     BASE_LINEAR_WEIGHTS,
+    DEFAULT_FIP_CONSTANT,
+    DEFAULT_LEAGUE_ERA,
+    REFERENCE_RUNS_PER_PA,
     add_batting_environment,
     calculate_asof_kbo_constants,
     calculate_asof_park_factor,
@@ -176,6 +179,12 @@ def _build_asof_constants(
         "league_runs_per_pa",
         *BASE_LINEAR_WEIGHTS,
     ]
+    explicit_prior = {
+        "league_era": DEFAULT_LEAGUE_ERA,
+        "fip_constant": DEFAULT_FIP_CONSTANT,
+        "league_runs_per_pa": REFERENCE_RUNS_PER_PA,
+        **BASE_LINEAR_WEIGHTS,
+    }
     current = current.merge(
         previous[["year", *fallback_columns]],
         on="year",
@@ -183,7 +192,11 @@ def _build_asof_constants(
         suffixes=("", "_prior"),
     )
     for column in fallback_columns:
-        current[column] = current[column].fillna(current[f"{column}_prior"])
+        current[column] = (
+            current[column]
+            .fillna(current[f"{column}_prior"])
+            .fillna(explicit_prior[column])
+        )
     return current.drop(
         columns=[f"{column}_prior" for column in fallback_columns]
     )

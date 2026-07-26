@@ -7,6 +7,8 @@ import pandas as pd
 
 
 REFERENCE_RUNS_PER_PA = 0.115
+DEFAULT_LEAGUE_ERA = 4.50
+DEFAULT_FIP_CONSTANT = 3.10
 BASE_LINEAR_WEIGHTS = {
     "weight_bb": 0.69,
     "weight_hp": 0.72,
@@ -82,11 +84,12 @@ def calculate_asof_park_factor(
     *,
     prior_games: float = 50.0,
 ) -> pd.DataFrame:
-    """각 경기보다 먼저 끝난 경기만 사용해 구장 득점 팩터를 계산한다."""
+    """기준시각 전에 결과가 가용한 경기만 사용해 구장 득점 팩터를 계산한다."""
 
     required = {
         "s_no",
-        "game_datetime",
+        "feature_cutoff_datetime",
+        "result_available_datetime",
         "s_code",
         "homeScore",
         "awayScore",
@@ -95,54 +98,97 @@ def calculate_asof_park_factor(
     if missing:
         raise ValueError(f"구장 팩터 계산 열 누락: {sorted(missing)}")
 
-    data = games[list(required)].copy()
-    data["game_datetime"] = pd.to_datetime(
-        data["game_datetime"], errors="coerce", utc=True
+    requests = games[
+        ["s_no", "feature_cutoff_datetime", "s_code"]
+    ].copy()
+    requests["feature_cutoff_datetime"] = pd.to_datetime(
+        requests["feature_cutoff_datetime"], errors="coerce", utc=True
     )
-    data["total_runs"] = (
-        pd.to_numeric(data["homeScore"], errors="coerce")
-        + pd.to_numeric(data["awayScore"], errors="coerce")
+    requests["_input_order"] = np.arange(len(requests))
+
+    events = games[
+        [
+            "s_no",
+            "result_available_datetime",
+            "s_code",
+            "homeScore",
+            "awayScore",
+        ]
+    ].copy()
+    events["result_available_datetime"] = pd.to_datetime(
+        events["result_available_datetime"], errors="coerce", utc=True
+    )
+    events["total_runs"] = (
+        pd.to_numeric(events["homeScore"], errors="coerce")
+        + pd.to_numeric(events["awayScore"], errors="coerce")
+    )
+    events = events.dropna(
+        subset=["result_available_datetime", "total_runs"]
     )
 
     time_totals = (
-        data.groupby("game_datetime", as_index=False, dropna=False)["total_runs"]
+        events.groupby("result_available_datetime", as_index=False)["total_runs"]
         .agg(["sum", "count"])
         .reset_index()
-        .sort_values("game_datetime")
+        .sort_values("result_available_datetime")
     )
-    time_totals["league_runs_before"] = time_totals["sum"].cumsum().shift(1)
-    time_totals["league_games_before"] = time_totals["count"].cumsum().shift(1)
+    time_totals["league_runs_before"] = time_totals["sum"].cumsum()
+    time_totals["league_games_before"] = time_totals["count"].cumsum()
+    league = pd.merge_asof(
+        requests.sort_values("feature_cutoff_datetime"),
+        time_totals[
+            [
+                "result_available_datetime",
+                "league_runs_before",
+                "league_games_before",
+            ]
+        ],
+        left_on="feature_cutoff_datetime",
+        right_on="result_available_datetime",
+        direction="backward",
+        allow_exact_matches=False,
+    )
 
     park_totals = (
-        data.groupby(["s_code", "game_datetime"], as_index=False, dropna=False)[
-            "total_runs"
-        ]
+        events.groupby(
+            ["s_code", "result_available_datetime"],
+            as_index=False,
+            dropna=False,
+        )["total_runs"]
         .agg(["sum", "count"])
         .reset_index()
-        .sort_values(["s_code", "game_datetime"])
+        .sort_values(["result_available_datetime", "s_code"])
     )
     grouped = park_totals.groupby("s_code", dropna=False)
-    park_totals["park_runs_before"] = grouped["sum"].cumsum() - park_totals["sum"]
-    park_totals["park_games_before"] = (
-        grouped["count"].cumsum() - park_totals["count"]
-    )
-
-    data = data.merge(
-        time_totals[
-            ["game_datetime", "league_runs_before", "league_games_before"]
-        ],
-        on="game_datetime",
-        how="left",
-    ).merge(
+    park_totals["park_runs_before"] = grouped["sum"].cumsum()
+    park_totals["park_games_before"] = grouped["count"].cumsum()
+    park = pd.merge_asof(
+        requests.sort_values(["feature_cutoff_datetime", "s_code"]),
         park_totals[
             [
                 "s_code",
-                "game_datetime",
+                "result_available_datetime",
                 "park_runs_before",
                 "park_games_before",
             ]
         ],
-        on=["s_code", "game_datetime"],
+        left_on="feature_cutoff_datetime",
+        right_on="result_available_datetime",
+        by="s_code",
+        direction="backward",
+        allow_exact_matches=False,
+    )
+
+    data = league[
+        [
+            "s_no",
+            "_input_order",
+            "league_runs_before",
+            "league_games_before",
+        ]
+    ].merge(
+        park[["s_no", "park_runs_before", "park_games_before"]],
+        on="s_no",
         how="left",
     )
     league_average = data["league_runs_before"] / data[
@@ -161,9 +207,12 @@ def calculate_asof_park_factor(
         "historical_shrunk",
         "league_prior",
     )
-    return data[["s_no", "park_factor", "park_factor_source"]].sort_values(
-        "s_no"
-    ).reset_index(drop=True)
+    return (
+        data.sort_values("_input_order")[
+            ["s_no", "park_factor", "park_factor_source"]
+        ]
+        .reset_index(drop=True)
+    )
 
 
 def calculate_asof_kbo_constants(
