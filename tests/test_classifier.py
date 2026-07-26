@@ -50,6 +50,77 @@ class ClassifierTests(unittest.TestCase):
         np.testing.assert_allclose(first_probability, second_probability)
         self.assertTrue(((first_probability >= 0) & (first_probability <= 1)).all())
 
+    def test_classifier_fold_calibration_is_separate_from_validation(self):
+        from train_classifier import _evaluate_classifier_fold
+
+        dates = pd.to_datetime(
+            [
+                "2025-04-01T18:30:00+09:00",
+                "2025-04-02T18:30:00+09:00",
+                "2025-04-03T18:30:00+09:00",
+                "2025-04-04T18:30:00+09:00",
+                "2025-04-04T18:30:00+09:00",
+            ],
+            utc=True,
+        )
+        train = pd.DataFrame(
+            {
+                "s_no": [1, 2, 3, 4, 5],
+                "game_datetime": dates,
+                "feature": [-2.0, -1.0, 1.0, 2.0, -0.5],
+                "target_home_win": [0, 1, 0, 1, 0],
+            }
+        )
+        validation = pd.DataFrame(
+            {
+                "s_no": [5, 6],
+                "game_datetime": pd.to_datetime(
+                    ["2025-04-05T18:30:00+09:00", "2025-04-06T18:30:00+09:00"],
+                    utc=True,
+                ),
+                "feature": [0.0, 1.5],
+                "target_home_win": [0, 1],
+            },
+            index=[10, 11],
+        )
+
+        probs = _evaluate_classifier_fold("logistic", ["feature"], train, validation)
+
+        self.assertEqual(list(probs.index), [10, 11])
+        self.assertTrue(((probs >= 0) & (probs <= 1)).all())
+
+    def test_sigmoid_calibrator_uses_unregularized_logistic_regression(self):
+        from classifier_model import SigmoidCalibrator
+
+        calibrator = SigmoidCalibrator()
+
+        self.assertTrue(np.isinf(calibrator.model.C))
+        self.assertEqual(calibrator.model.random_state, 42)
+
+    def test_probability_metrics_reports_unregularized_calibration_slope(self):
+        from classifier_model import probability_metrics, _unregularized_logistic
+
+        rng = np.random.default_rng(42)
+        logits = rng.normal(0, 1, size=200)
+        probs = 1 / (1 + np.exp(-logits))
+        targets = rng.binomial(1, probs)
+
+        metrics = probability_metrics(targets, probs)
+        expected = _unregularized_logistic().fit(
+            np.log(probs / (1 - probs)).reshape(-1, 1), targets
+        )
+
+        self.assertAlmostEqual(
+            metrics["calibration_intercept"],
+            expected.intercept_[0],
+            places=10,
+        )
+        self.assertAlmostEqual(
+            metrics["calibration_slope"],
+            expected.coef_[0, 0],
+            places=10,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

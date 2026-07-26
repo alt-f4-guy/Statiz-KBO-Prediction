@@ -191,11 +191,15 @@ def build_classifier(
     raise ValueError(f"지원하지 않는 분류기: {kind}")
 
 
+def _unregularized_logistic() -> LogisticRegression:
+    return LogisticRegression(C=np.inf, random_state=RANDOM_STATE)
+
+
 class SigmoidCalibrator:
     """분리된 보정 구간의 로짓에 시그모이드 보정을 적합한다."""
 
     def __init__(self) -> None:
-        self.model = LogisticRegression(random_state=RANDOM_STATE)
+        self.model = _unregularized_logistic()
 
     @staticmethod
     def _logit(probability: np.ndarray) -> np.ndarray:
@@ -231,7 +235,7 @@ def probability_metrics(
     y = np.asarray(target, dtype=int)
     probability = np.clip(np.asarray(home_probability, dtype=float), 1e-6, 1 - 1e-6)
     logit = np.log(probability / (1 - probability)).reshape(-1, 1)
-    calibration = LogisticRegression(random_state=RANDOM_STATE).fit(logit, y)
+    calibration = _unregularized_logistic().fit(logit, y)
     return {
         "log_loss": float(log_loss(y, probability, labels=[0, 1])),
         "brier_score": float(brier_score_loss(y, probability)),
@@ -240,3 +244,4 @@ def probability_metrics(
         "roc_auc": float(roc_auc_score(y, probability)),
         "accuracy": float(accuracy_score(y, probability >= 0.5)),
     }
+
