@@ -1,0 +1,116 @@
+"""실시간 예측 확률 선택, API 계약, 재시도와 불변 로그."""
+
+from __future__ import annotations
+
+import time
+from pathlib import Path
+from typing import Any, Callable
+
+import pandas as pd
+
+from statiz_api import StatizAPI, StatizAPIError
+
+
+API_PAYLOAD_COLUMNS = {
+    "ptt_idx",
+    "s_no",
+    "homeTeam",
+    "awayTeam",
+    "predictWinTeam",
+    "percent",
+    "update_time",
+}
+
+
+def build_prediction_payload(
+    *,
+    ptt_idx: str,
+    s_no: int,
+    home_team_name: str,
+    away_team_name: str,
+    home_win_probability: float,
+    update_time: str,
+) -> dict[str, Any]:
+    """API percent는 선택 팀과 무관하게 항상 홈팀 확률로 고정한다."""
+
+    if not 0 <= home_win_probability <= 1:
+        raise ValueError("홈 승리 확률은 0과 1 사이여야 합니다.")
+    home_selected = home_win_probability >= 0.5
+    selected_probability = (
+        home_win_probability if home_selected else 1 - home_win_probability
+    )
+    return {
+        "ptt_idx": ptt_idx,
+        "s_no": int(s_no),
+        "homeTeam": home_team_name,
+        "awayTeam": away_team_name,
+        "predictWinTeam": home_team_name if home_selected else away_team_name,
+        "percent": round(float(home_win_probability) * 100, 2),
+        "selected_team_probability": round(
+            float(selected_probability) * 100, 2
+        ),
+        "update_time": update_time,
+    }
+
+
+def select_prediction_probability(
+    *,
+    primary_predictor: Callable[[], float],
+    fallback_predictor: Callable[[], float],
+    feature_quality_ok: bool,
+    fallback_reason: str | None = None,
+) -> tuple[float, str, str]:
+    """피처 품질 또는 주 모델 추론 실패에만 대체 모델을 사용한다."""
+
+    if not feature_quality_ok:
+        reason = fallback_reason or "feature_quality_failed"
+        return float(fallback_predictor()), "fallback_recent10", reason
+    try:
+        return float(primary_predictor()), "primary", ""
+    except Exception as exc:
+        reason = f"primary_inference_error:{exc.__class__.__name__}"
+        return float(fallback_predictor()), "fallback_recent10", reason
+
+
+def send_prediction_with_retry(
+    api: StatizAPI,
+    payload: dict[str, Any],
+    *,
+    max_attempts: int = 3,
+    retry_delay: float = 2.0,
+    sleep: Callable[[float], None] = time.sleep,
+) -> dict[str, Any]:
+    """같은 예측값을 제한된 횟수만 재전송하고 성공 여부를 반환한다."""
+
+    api_payload = {
+        key: value for key, value in payload.items() if key in API_PAYLOAD_COLUMNS
+    }
+    last_error: Exception | None = None
+    for attempt in range(max_attempts):
+        try:
+            response = api.post("prediction/savePrediction", api_payload)
+            if isinstance(response, dict) and response.get("result_cd") in (
+                100,
+                "100",
+            ):
+                return response
+            last_error = StatizAPIError("저장 API가 성공 코드를 반환하지 않았습니다.")
+        except StatizAPIError as exc:
+            last_error = exc
+        if attempt + 1 < max_attempts:
+            sleep(retry_delay * (attempt + 1))
+    raise StatizAPIError("예측 저장 재시도 횟수를 초과했습니다.") from last_error
+
+
+def append_prediction_log(path: Path, record: dict[str, Any]) -> None:
+    """기존 행을 변경하지 않고 예측 레코드를 추가한다."""
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    frame = pd.DataFrame([record])
+    frame.to_csv(
+        path,
+        mode="a",
+        header=not path.exists(),
+        index=False,
+        encoding="utf-8-sig",
+    )

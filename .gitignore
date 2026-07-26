@@ -1,28 +1,30 @@
-# API secrets
+# 운영 비밀값: 예시 파일만 추적한다.
 .env
+.env.*
+!.env.example
+config/.env
+config/.env.*
+!config/.env.example
 
-# Python Cache
+# 누적 원천 데이터·학습 산출물·이전 구현
+/data/
+/artifacts/
+/archive/
+
+# 개발 도구 상태와 파이썬 캐시
+/\.ua/
 __pycache__/
-*.pyc
+**/__pycache__/
+*.py[cod]
 
-# OS files
+# 운영체제·노트북 임시 파일
 .DS_Store
+**/.DS_Store
+.ipynb_checkpoints/
 
-# Datasets (Exclude real raw/processed data)
-data/raw/*
-data/processed/*
-data/final/*
-
-# Exceptions for gitkeep/placeholder structure
-!data/raw/.gitkeep
-!data/processed/.gitkeep
-!data/final/.gitkeep
-
-# Sample datasets to keep in git
-!data/sample/
-
-# Output files & logs
-catboost_info/
-*.csv
-!data/sample/**/*.csv
-!data/sample/*.csv
+# 로컬 가상환경과 테스트·도구 캐시
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/

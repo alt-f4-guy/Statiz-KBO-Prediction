@@ -1,110 +1,155 @@
-# Statiz KBO Prediction Pipeline
+# KBO 경기 승리확률 예측 파이프라인
 
-Statiz API를 활용하여 KBO 프로야구 데이터를 수집하고, 선수 및 팀 전력 지표를 가공하여 경기 결과를 예측하는 머신러닝 파이프라인 프로젝트입니다. 
+Statiz API와 누적 경기 데이터를 이용해 KBO 정규시즌 경기의 **홈팀 승리 확률**을 산출·전송하는 데이터 파이프라인입니다. 데이터 수집부터 시점 기준 피처 생성, 분류 모델 학습·보정, 백테스트, 실시간 예측까지 하나의 실행 흐름으로 관리합니다.
 
-## 프로젝트 정보
-* 개발 기간: 2025.12.20 ~ 진행 중
-* 주요 목적: 최근 경기 흐름과 선수별 전력 지표(FIP, wRC+ 등) 및 당일 선발 로스터 정보를 결합하여 2026시즌 KBO 경기 결과를 예측합니다.
+> 이 프로젝트의 API 전송 확률(`percent`)은 예측 승리 팀과 관계없이 항상 **홈팀 승리 확률 × 100**입니다.
 
-## 기술 스택
-* 언어: Python 3.14
-* 주요 라이브러리: Pandas, NumPy, Scikit-learn, LightGBM, CatBoost, Optuna, Requests, python-dotenv, Rich
+## 주요 구성
 
-## 모델 설계 및 예측 방법론
-본 프로젝트는 양 팀의 예상 득점(Score)을 개별적으로 예측하고 이를 통계적으로 연산하여 최종 승패 확률을 추론하는 구조를 가집니다.
+- **시점 기준 피처 생성**: 경기 시작 전까지 이용 가능한 선수·팀 기록만 사용합니다.
+- **로스터 기반 불펜 집계**: 경기 시작 시점 로스터에 등록된 투수 가운데 당일 선발 투수를 제외한 후보군으로 불펜 피처를 구성합니다.
+- **확률 중심 모델 선택**: 직접 승패 분류기와 득점 분포 모델을 동일한 경기·확률 지표로 비교하고, 운영 모델을 선택합니다.
+- **순차 검증과 보정**: 시간 순서 분할, 로그 손실·브라이어 점수·보정 지표를 기반으로 튜닝과 평가를 수행합니다.
+- **운영 안전장치**: 선수 피처 품질이 부족하거나 주 모델 추론이 실패하면 최근 10경기 승률 기반 대체 모델을 사용합니다.
+- **예측 로그 평가**: 경기 전 최초 기록 예측만으로 전향적 성능을 집계합니다.
 
-### 1. 개별 득점 모델링 (Poisson Regression 및 ML 예측 모델링)
-야구 경기 득점은 정수형 카운트 데이터이며 단기간 내 발생하는 사건이라는 특성을 가집니다. 이를 반영하기 위해 포아송(Poisson) 분포 또는 정밀한 머신러닝 회귀 모델을 구성하여 홈팀 득점(homeScore)과 원정팀 득점(awayScore)을 각각 예측합니다.
-* **CatBoost Regressor**: 범주형 특성(홈/원정 팀 코드) 간의 관계를 효과적으로 학습하며 Poisson 손실 함수를 사용하여 점수를 추정합니다.
-* **LightGBM Regressor**: 리프 중심(Leaf-wise) 트리 분할 방식으로 미세한 비선형 관계를 학습하며 poisson 목적 함수로 학습을 진행합니다.
-* **Random Forest Regressor**: 다수의 의사결정나무를 앙상블(Bagging)하여 분산을 감소시키고 모델의 일반화 성능을 견고하게 보완합니다.
-* **SVR (Support Vector Regressor)**: RBF 커널을 통해 고차원 공간에서의 유연한 비선형 회귀선(경계)을 도출하여 데이터셋의 규모에 제약을 덜 받으면서도 강인한 정규화 성능을 보입니다.
-* **Ridge Regression**: 선형 제약을 통해 규제를 가함으로써 트리 모델들의 과적합을 방지하고 일반화 성능을 보완합니다.
+## 파이프라인 흐름
 
-### 2. 가중치 학습 (Sample Weight)
-시간 흐름에 따른 구단 및 선수들의 최신 기량을 모델에 더욱 민감하게 반영하기 위해, 최근 경기에 더 높은 가중치를 주는 가중치(sample_weight)를 적용하여 학습을 진행합니다.
-
-### 3. 승리 확률 산출 (Skellam 분포 활용)
-앙상블 예측을 통해 얻은 홈팀의 기대 득점(lambda_home)과 원정팀의 기대 득점(lambda_away)을 바탕으로, 두 독립적인 포아송 분포 변수의 차를 설명하는 스켈람(Skellam) 분포를 정의합니다. 이를 활용하여 홈팀이 승리할 확률과 원정팀이 승리할 확률을 수학적으로 연산하여 단순 승패 이진 분류보다 높은 수준의 확률적 인사이트를 제공합니다.
+```text
+Statiz API / 누적 원천 데이터
+        ↓
+일정 · 라인업 · 로스터 · 선수 기록 수집
+        ↓
+원천 데이터 정형화
+        ↓
+v9 시점 기준 피처 생성
+        ↓
+하이퍼파라미터 튜닝 · 분류/득점 모델 학습 · 비교
+        ↓
+2026 백테스트 및 운영 모델 확정
+        ↓
+실시간 예측 · 홈팀 승률 전송 · 예측 로그 저장
+```
 
 ## 디렉터리 구조
+
 ```text
-├── 1.collect_schedule.py       # 일정 및 경기 결과 수집
-├── 2.collect_lineups.py        # 선발 라인업 수집
-├── 3.collect_rosters.py        # 로스터(엔트리) 정보 수집
-├── 4.collect_player_stats.py   # 선수별 누적 및 일별 스탯 수집
-├── 5.process_raw_data.py       # 원본 데이터 전처리 및 중간 저장
-├── create_feature_matrix_v7.py # 피처 엔지니어링 및 훈련 데이터셋 생성
-├── tune_hyperparameters.py     # Optuna 기반 하이퍼파라미터 최적화
-├── backtest.py                 # 시계열 기반 모델 백테스트
-├── predict_2026.py             # 2026 시즌 경기 결과 예측 및 추론
-├── run_pipeline.py             # 수집부터 가공까지의 통합 실행 스크립트
-├── requirements.txt            # 의존성 패키지 정의
-├── .env.example                # 환경 변수 템플릿
-└── data/
-    ├── raw/                    # 수집된 원본 CSV 데이터 저장 경로
-    ├── processed/              # 중간 전처리 완료된 데이터 저장 경로
-    ├── final/                  # 훈련 모델에 직접 입력되는 최종 데이터 저장 경로
-    └── sample/                 # 깃허브 공개용 데이터 스키마 샘플 경로
+.
+├── run_pipeline.py             # 전체 파이프라인 진입점
+├── config/
+│   └── .env.example            # 환경변수 예시
+├── src/kbo_pipeline/           # 공통 수집·가공·피처·모델·API 모듈
+├── scripts/
+│   ├── collect/                # 일정·라인업·로스터·선수 기록 수집
+│   ├── build/                  # 원천 정형화와 v9 피처 생성
+│   ├── model/                  # 튜닝·학습·모델 비교·백테스트
+│   └── ops/                    # 실시간 예측과 운영 로그 평가
+├── data/                       # 원천·정형·최종 데이터셋
+├── artifacts/
+│   ├── models/                 # 운영 모델과 선택 메타데이터
+│   ├── tuning/                 # 하이퍼파라미터 탐색 결과
+│   ├── evaluations/            # 비교·백테스트·보정 결과
+│   ├── operations/             # 실시간 예측 로그
+│   └── training_logs/          # 학습 로그
+├── docs/                       # 설계·개선·검증 문서
+└── archive/legacy/             # 이전 구현 보관용
 ```
 
-## 개발 및 실행 가이드
+## 요구 사항
 
-### 1. 환경 설정
-필요한 패키지를 설치하고 환경 변수를 설정합니다.
+- Python 3.10 이상
+- Statiz API 인증 정보
+
+현재 저장소에는 의존성 잠금 파일이 없으므로, 아래는 코드가 사용하는 최소 패키지 설치 예시입니다.
+
 ```bash
-pip install -r requirements.txt
+python3 -m venv .venv
+source .venv/bin/activate
+pip install pandas numpy scikit-learn catboost optuna scipy statsmodels joblib requests rich tqdm
 ```
 
-프로젝트 루트 디렉터리에 `.env` 파일을 생성하고 아래와 같이 Statiz API 인증 정보를 기입합니다. (해당 파일은 `.gitignore`에 의해 버전 관리에서 제외됩니다.)
-```env
-STATIZ_API_KEY=your_api_key_here
-STATIZ_SECRET=your_api_secret_here
-```
+## 설정
 
-### 2. 파이썬 스크립트 실행 순서
+[`config/.env.example`](config/.env.example)를 참고하여 다음 환경변수를 실행 환경에 주입합니다. 이 프로젝트는 `.env` 파일을 자동으로 읽지 않으므로, 셸·CI·비밀 관리 도구에서 직접 설정해야 합니다.
 
-#### 데이터 수집 및 전처리 파이프라인
-통합 파이프라인을 기동하여 데이터를 차례대로 수집하고 전처리합니다.
 ```bash
-python run_pipeline.py
+export STATIZ_API_KEY='발급받은_API_키'
+export STATIZ_SECRET='발급받은_시크릿'
+export STATIZ_PTT_IDX='예측_전송_식별자'
 ```
-개별적으로 수행할 경우 아래 순서를 따릅니다:
-1. `1.collect_schedule.py`: 경기 일정 및 결과 수집
-2. `2.collect_lineups.py`: 경기별 선발 라인업 수집
-3. `3.collect_rosters.py`: 구단별 1군 로스터 수집
-4. `4.collect_player_stats.py`: 선수 일별/시즌별 스탯 수집
-5. `5.process_raw_data.py`: 수집된 데이터의 스키마 및 결측치 전처리
 
-#### 피처 생성 및 모델 훈련
-1. **피처 매트릭스 구성**: 
-   ```bash
-   python create_feature_matrix_v7.py
-   ```
-   팀 단위 롤링 지표, 투타 하이브리드 전력 평가 지표 등을 조합하여 최종 학습용 피처셋을 빌드합니다.
-   
-2. **하이퍼파라미터 튜닝**: 
-   ```bash
-   python tune_hyperparameters.py
-   ```
-   Optuna를 기반으로 예측 오차를 최소화하는 CatBoost, LightGBM 등의 최적 매개변수를 탐색하고 결과를 저장합니다.
+API 키·시크릿·개인별 식별자는 커밋하지 마십시오.
 
-3. **백테스트 평가**:
-   ```bash
-   python backtest.py
-   ```
-   과거 데이터를 바탕으로 시계열 Rolling-window 방식으로 모델의 예측 성능을 시뮬레이션하고 평가 지표를 기록합니다.
+## 재현 가능한 합성 예시 데이터
 
-4. **2026 시즌 예측**:
-   ```bash
-   python predict_2026.py
-   ```
-   수집 완료된 당일 데이터와 라인업을 불러와 오늘 예정된 경기 결과를 예측합니다.
+실제 Statiz 원천 데이터를 공개하지 않고도 모델 입력 구조를 확인할 수 있도록, 고정 시드 42로 생성한 v9 합성 데이터셋을 제공합니다. 생성 방법과 범위는 [examples/README.md](examples/README.md)를 참고하십시오.
 
-## 주의 사항
-* 본 프로젝트는 비공개 API인 Statiz API를 호출합니다. 승인되지 않은 환경에서 대량의 무단 호출을 지양하며, 로컬 환경에서 재현 테스트 시에는 `data/sample/` 디렉터리에 포함된 샘플 데이터를 `data/raw/` 및 하위 폴더에 복사하여 구조를 확인한 후 진행하시는 것을 권장합니다.
+```bash
+# Git으로 추적되는 예시 CSV를 동일한 내용으로 다시 생성
+python3 examples/generate_synthetic_v9_data.py
 
-## Contributors
-본 프로젝트의 설계 및 구현에 참여한 기여자입니다.
-* **[김민상(alt-f4-guy)](https://github.com/alt-f4-guy)** - 머신러닝 예측 모델링 및 시계열 백테스트 설계
-* **[류환진(Ryuhwanjin)](https://github.com/Ryuhwanjin)** - 데이터 수집 파이프라인 구축 및 데이터 가공
+# 로컬 모델 입력 위치에 합성 데이터를 생성
+python3 examples/generate_synthetic_v9_data.py \
+  --output data/final/final_training_set_v9.csv
+```
+
+이 데이터는 API 수집·원천 정형화·실제 성능 검증을 대체하지 않으며, 오프라인 모델 단계의 실행 예시만을 위한 합성 데이터입니다.
+
+## 실행
+
+### 전체 파이프라인
+
+프로젝트 루트에서 실행합니다.
+
+```bash
+python3 run_pipeline.py
+```
+
+실행 순서는 수집 → 정형화 → v9 피처 생성 → 튜닝 → 분류/득점 모델 학습 → 모델 비교 → 대체 모델 평가 → 백테스트 → 실시간 예측입니다. 마지막 실시간 예측 단계는 폴링 루프이므로 지속 실행됩니다.
+
+### 개별 모델 작업
+
+루트 파일을 늘리지 않고 개별 스크립트를 모듈로 실행합니다. macOS·Linux 기준 예시는 다음과 같습니다.
+
+```bash
+# CatBoost 분류기 하이퍼파라미터 튜닝
+PYTHONPATH=src/kbo_pipeline:src python3 -m scripts.model.tune_hyperparameters
+
+# 운영 모델 2026 백테스트
+PYTHONPATH=src/kbo_pipeline:src python3 -m scripts.model.backtest
+
+# 예측 로그 성능 집계
+PYTHONPATH=src/kbo_pipeline:src python3 -m scripts.ops.evaluate_prediction_log
+```
+
+튜닝 횟수는 환경변수로 조정할 수 있습니다.
+
+```bash
+KBO_OPTUNA_TRIALS=50 PYTHONPATH=src/kbo_pipeline:src \
+  python3 -m scripts.model.tune_hyperparameters
+```
+
+## 주요 입출력
+
+| 단계 | 입력 | 주요 출력 |
+|---|---|---|
+| 수집 | Statiz API | `data/raw/` |
+| 정형화 | `data/raw/` | `data/processed/` |
+| 피처 생성 | 원천·정형 데이터 | `data/final/final_training_set_v9.csv` |
+| 튜닝 | v9 최종 데이터셋 | `artifacts/tuning/best_classifier_hyperparameters.csv` |
+| 모델 학습·비교 | v9 최종 데이터셋 | `artifacts/models/best_model.joblib` |
+| 백테스트 | 운영 모델·v9 최종 데이터셋 | `artifacts/evaluations/backtest_results_v9.csv` |
+| 실시간 운영 | 당일 일정·라인업·로스터 | `artifacts/operations/prediction_log.csv` |
+
+## 운영 원칙
+
+- 학습·검증·백테스트는 시간 순서를 지키며, 2026 시즌 데이터는 최종 평가 구간으로 분리합니다.
+- 피처는 경기 시작 시각을 기준으로 계산하며, 경기 후에 확정되는 기록을 같은 경기의 입력으로 사용하지 않습니다.
+- API 전송 페이로드의 `percent`는 항상 홈팀 승리 확률이고, `predictWinTeam`은 해당 확률이 0.5 이상인지에 따라 결정합니다.
+- 실시간 예측이 대체 모델을 사용한 경우 모델 유형과 발동 사유를 예측 로그에 기록합니다.
+
+## 데이터와 산출물 관리
+
+`data/`와 `artifacts/`에는 대용량 데이터, 학습 모델, API 응답 기반 산출물이 포함될 수 있습니다. 저장소 공개 시 데이터 사용 권한과 개인정보·API 정책을 확인하고, 비밀값과 불필요한 대용량 산출물은 제외하십시오.
+
+상세 개선 사항과 남은 검증 항목은 [docs](docs/)에서 확인할 수 있습니다.
