@@ -103,6 +103,35 @@ class TimeSplitTests(unittest.TestCase):
         }
         self.assertNotIn(7, used_ids)
 
+    def test_calibration_tail_is_disjoint_and_strictly_later(self):
+        from time_splits import split_calibration_tail
+
+        frame = pd.DataFrame(
+            {
+                "s_no": [1, 2, 3, 4, 5, 6],
+                "game_datetime": pd.to_datetime(
+                    [
+                        "2025-04-01T18:30:00+09:00",
+                        "2025-04-01T18:30:00+09:00",
+                        "2025-04-02T18:30:00+09:00",
+                        "2025-04-03T18:30:00+09:00",
+                        "2025-04-04T18:30:00+09:00",
+                        "2025-04-04T18:30:00+09:00",
+                    ],
+                    utc=True,
+                ),
+            }
+        )
+
+        train_ids, calibration_ids = split_calibration_tail(frame, 0.34)
+
+        self.assertTrue(set(train_ids).isdisjoint(calibration_ids))
+        train_end = frame.loc[frame["s_no"].isin(train_ids), "game_datetime"].max()
+        calibration_start = frame.loc[
+            frame["s_no"].isin(calibration_ids), "game_datetime"
+        ].min()
+        self.assertLess(train_end, calibration_start)
+
 
 if __name__ == "__main__":
     unittest.main()

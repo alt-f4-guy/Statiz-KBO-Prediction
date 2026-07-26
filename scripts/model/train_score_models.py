@@ -13,12 +13,13 @@ from classifier_model import (
     select_model_features,
 )
 from pipeline_config import EVALUATIONS_DIR, FINAL_DATA_DIR, MODEL_DIR
+from prediction_models import CalibratedScoreProbabilityModel
 from score_models import (
     build_score_model,
     conditional_skellam_home_probability,
     score_prediction_metrics,
 )
-from time_splits import make_temporal_split_manifest
+from time_splits import make_temporal_split_manifest, split_calibration_tail
 
 
 def _rows_for_ids(frame: pd.DataFrame, ids: list[int]) -> pd.DataFrame:
@@ -38,6 +39,42 @@ def _probability_rows(
     return prepared, probability
 
 
+def _evaluate_score_fold(
+    kind: str,
+    features: list[str],
+    train: pd.DataFrame,
+    validation: pd.DataFrame,
+) -> tuple[pd.DataFrame, np.ndarray, np.ndarray, np.ndarray]:
+    base_ids, calibrator_ids = split_calibration_tail(train)
+    base_train = _rows_for_ids(train, base_ids)
+    fold_calibration = _rows_for_ids(train, calibrator_ids)
+
+    model = build_score_model(kind, features)
+    model.fit(base_train[features], base_train["homeScore"], base_train["awayScore"])
+
+    calib_home, calib_away = model.predict(fold_calibration[features])
+    calib_frame, raw_calib_prob = _probability_rows(
+        fold_calibration, calib_home, calib_away
+    )
+
+    if calib_frame["target_home_win"].nunique() < 2:
+        raise ValueError("보정 구간에 두 클래스가 모두 존재해야 합니다.")
+
+    calibrator = SigmoidCalibrator().fit(
+        raw_calib_prob, calib_frame["target_home_win"]
+    )
+
+    val_home, val_away = model.predict(validation[features])
+    val_frame, raw_val_prob = _probability_rows(validation, val_home, val_away)
+
+    if val_frame["target_home_win"].nunique() < 2:
+        raise ValueError("검증 구간에 두 클래스가 모두 존재해야 합니다.")
+
+    probability = calibrator.predict(raw_val_prob)
+    return val_frame, probability, val_home, val_away
+
+
+
 def run_training() -> pd.DataFrame:
     data = pd.read_csv(FINAL_DATA_DIR / "final_training_set_v9.csv")
     manifest = make_temporal_split_manifest(data)
@@ -49,14 +86,12 @@ def run_training() -> pd.DataFrame:
         for fold_index, fold in enumerate(manifest["development_folds"], start=1):
             train = _rows_for_ids(data, fold["train_s_nos"])
             validation = _rows_for_ids(data, fold["validation_s_nos"])
-            model = build_score_model(kind, features)
-            model.fit(
-                train[features], train["homeScore"], train["awayScore"]
-            )
-            home_mean, away_mean = model.predict(validation[features])
-            probability_frame, probability = _probability_rows(
-                validation, home_mean, away_mean
-            )
+            (
+                probability_frame,
+                probability,
+                home_mean,
+                away_mean,
+            ) = _evaluate_score_fold(kind, features, train, validation)
             results.append(
                 {
                     "model": kind,
@@ -126,11 +161,11 @@ def run_training() -> pd.DataFrame:
                 **score_metrics,
             }
         )
-        fitted_models[kind] = {
-            "score_model": model,
-            "calibrator": calibrator,
-            "feature_columns": features,
-        }
+        fitted_models[kind] = CalibratedScoreProbabilityModel(
+            score_model=model,
+            calibrator=calibrator,
+            feature_columns=features,
+        )
         non_draw = final_test["homeScore"].ne(final_test["awayScore"])
         final_predictions.append(
             pd.DataFrame(

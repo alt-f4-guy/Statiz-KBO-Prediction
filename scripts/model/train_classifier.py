@@ -18,7 +18,11 @@ from classifier_model import (
     select_model_features,
 )
 from pipeline_config import EVALUATIONS_DIR, FINAL_DATA_DIR, MODEL_DIR, TUNING_DIR
-from time_splits import make_temporal_split_manifest, save_split_manifest
+from time_splits import (
+    make_temporal_split_manifest,
+    save_split_manifest,
+    split_calibration_tail,
+)
 
 
 SPLIT_PATH = FINAL_DATA_DIR / "time_split_manifest.json"
@@ -45,6 +49,32 @@ def _fit_calibrated_model(
     return CalibratedBinaryModel(model, calibrator, features)
 
 
+def _evaluate_classifier_fold(
+    kind: str,
+    features: list[str],
+    train: pd.DataFrame,
+    validation: pd.DataFrame,
+    params: dict | None = None,
+) -> pd.Series:
+    base_ids, calibrator_ids = split_calibration_tail(train)
+    base_train = _rows_for_ids(train, base_ids)
+    fold_calibration = _rows_for_ids(train, calibrator_ids)
+
+    if fold_calibration["target_home_win"].nunique() < 2:
+        raise ValueError("보정 구간에 두 클래스가 모두 존재해야 합니다.")
+    if validation["target_home_win"].nunique() < 2:
+        raise ValueError("검증 구간에 두 클래스가 모두 존재해야 합니다.")
+
+    calibrated_model = _fit_calibrated_model(
+        kind, features, base_train, fold_calibration, params
+    )
+    return pd.Series(
+        calibrated_model.predict_proba(validation[features])[:, 1],
+        index=validation.index,
+    )
+
+
+
 def run_training() -> tuple[pd.DataFrame, dict]:
     data = pd.read_csv(FINAL_DATA_DIR / "final_training_set_v9.csv")
     manifest = make_temporal_split_manifest(data)
@@ -66,13 +96,13 @@ def run_training() -> tuple[pd.DataFrame, dict]:
         for fold_index, fold in enumerate(manifest["development_folds"], start=1):
             train = _rows_for_ids(frame, fold["train_s_nos"])
             validation = _rows_for_ids(frame, fold["validation_s_nos"])
-            model = build_classifier(
+            probability = _evaluate_classifier_fold(
                 kind,
                 features,
+                train,
+                validation,
                 catboost_params if kind == "catboost" else None,
             )
-            model.fit(train[features], train["target_home_win"])
-            probability = model.predict_proba(validation[features])[:, 1]
             metrics = probability_metrics(
                 validation["target_home_win"], probability
             )

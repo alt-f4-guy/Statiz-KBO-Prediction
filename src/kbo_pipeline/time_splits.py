@@ -101,3 +101,27 @@ def save_split_manifest(manifest: dict, path: Path) -> None:
         json.dumps(manifest, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
+
+
+def split_calibration_tail(
+    frame: pd.DataFrame,
+    fraction: float = 0.20,
+) -> tuple[list[int], list[int]]:
+    """학습 프레임의 마지막 날짜 묶음을 보정 전용으로 분리한다."""
+
+    if not 0 < fraction < 1:
+        raise ValueError("fraction은 0과 1 사이여야 합니다.")
+    data = frame[["s_no", "game_datetime"]].copy()
+    data["game_date"] = _seoul_dates(data["game_datetime"])
+    dates = np.array(sorted(data["game_date"].unique()))
+    calibration_days = max(1, math.ceil(len(dates) * fraction))
+    if calibration_days >= len(dates):
+        raise ValueError("기본 학습과 보정에 각각 최소 한 경기일이 필요합니다.")
+    calibration_dates = set(dates[-calibration_days:])
+    calibration = data.loc[data["game_date"].isin(calibration_dates)]
+    train = data.loc[~data["game_date"].isin(calibration_dates)]
+    return (
+        train["s_no"].astype("int64").tolist(),
+        calibration["s_no"].astype("int64").tolist(),
+    )
+
