@@ -94,6 +94,64 @@ class SabermetricsTests(unittest.TestCase):
         self.assertAlmostEqual(first_year["league_obp"], 0.33)
         self.assertFalse(first_year.isna().any())
 
+    def test_asof_constants_ignore_current_and_future_events(self):
+        from sabermetrics import calculate_asof_kbo_constants
+
+        games = pd.DataFrame(
+            {
+                "s_no": [1, 2],
+                "year": [2026, 2026],
+                "feature_cutoff_datetime": pd.to_datetime(
+                    [
+                        "2026-04-02T18:29:59+09:00",
+                        "2026-04-03T18:29:59+09:00",
+                    ],
+                    utc=True,
+                ),
+            }
+        )
+        pitching = pd.DataFrame(
+            {
+                "year": [2026, 2026],
+                "event_datetime": pd.to_datetime(
+                    [
+                        "2026-04-01T18:30:00+09:00",
+                        "2026-04-03T18:30:00+09:00",
+                    ],
+                    utc=True,
+                ),
+                "IP": [9.0, 9.0],
+                "ER": [3.0, 99.0],
+                "HR": [1.0, 20.0],
+                "BB": [2.0, 30.0],
+                "HP": [0.0, 10.0],
+                "SO": [8.0, 0.0],
+            }
+        )
+        batting = pd.DataFrame(
+            {
+                "year": [2026, 2026],
+                "event_datetime": pitching["event_datetime"],
+                "R": [4.0, 99.0],
+                "PA": [36.0, 36.0],
+            }
+        )
+
+        original = calculate_asof_kbo_constants(games, pitching, batting)
+        changed_pitching = pitching.copy()
+        changed_batting = batting.copy()
+        changed_pitching.loc[1, ["ER", "HR", "BB"]] = [0.0, 0.0, 0.0]
+        changed_batting.loc[1, "R"] = 0.0
+        revised = calculate_asof_kbo_constants(
+            games, changed_pitching, changed_batting
+        )
+
+        pd.testing.assert_series_equal(
+            original.loc[0],
+            revised.loc[0],
+            check_names=False,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -2,6 +2,7 @@ import time
 import pandas as pd
 from tqdm.auto import tqdm
 from pipeline_config import RAW_DATA_DIR, load_api_credentials
+from io_utils import atomic_to_csv
 from statiz_api import StatizAPI, StatizAPIError
 
 # 1. 경로 설정
@@ -86,7 +87,7 @@ def run_roster_collection():
         if (i + 1) % batch_size == 0 and all_rosters:
             df_new = pd.DataFrame(all_rosters)
             df_final = pd.concat([df_existing, df_new], ignore_index=True).drop_duplicates(subset=['pj_date', 'p_no', 't_code'])
-            df_final.to_csv(output_file, index=False, encoding='utf-8-sig')
+            atomic_to_csv(df_final, output_file)
             df_existing = pd.read_csv(output_file)
             all_rosters = []
         
@@ -96,7 +97,7 @@ def run_roster_collection():
     if all_rosters:
         df_new = pd.DataFrame(all_rosters)
         df_final = pd.concat([df_existing, df_new], ignore_index=True).drop_duplicates(subset=['pj_date', 'p_no', 't_code'])
-        df_final.to_csv(output_file, index=False, encoding='utf-8-sig')
+        atomic_to_csv(df_final, output_file)
     
     print(f"\n완료! 로스터 데이터가 {output_file}에 저장되었습니다.")
 

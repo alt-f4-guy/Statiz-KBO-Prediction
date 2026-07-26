@@ -35,75 +35,41 @@ def assert_same_evaluation_games(predictions: pd.DataFrame) -> None:
 
 
 def select_operating_model(summary: pd.DataFrame) -> str:
-    """확률 지표 우선 규칙으로 운영 후보를 선택한다."""
+    """개발 구간 지표만으로 운영 모델을 선택한다."""
 
-    direct = summary.loc[summary["family"].eq("direct_classifier")].sort_values(
-        ["development_log_loss", "development_brier_score"]
-    )
-    score = summary.loc[summary["family"].eq("score_distribution")].sort_values(
-        ["development_log_loss", "development_brier_score"]
-    )
-    if direct.empty or score.empty:
-        candidates = summary.copy()
-    else:
-        candidates = pd.concat([direct.head(1), score.head(1)], ignore_index=True)
-        direct_best = candidates.loc[
-            candidates["family"].eq("direct_classifier")
-        ].iloc[0]
-        score_best = candidates.loc[
-            candidates["family"].eq("score_distribution")
-        ].iloc[0]
-        direct_wins = all(
-            direct_best[column] < score_best[column]
-            for column in (
-                "development_log_loss",
-                "development_brier_score",
-                "final_log_loss",
-                "final_brier_score",
+    candidates = (
+        summary.assign(
+            development_calibration_distance=(
+                summary["development_calibration_intercept"].abs()
+                + (summary["development_calibration_slope"] - 1).abs()
             )
         )
-        score_wins = all(
-            score_best[column] < direct_best[column]
-            for column in (
-                "development_log_loss",
-                "development_brier_score",
-                "final_log_loss",
-                "final_brier_score",
-            )
-        )
-        if direct_wins:
-            return str(direct_best["model"])
-        if score_wins:
-            return str(score_best["model"])
-
-    candidates = candidates.copy()
-    candidates["calibration_distance"] = (
-        candidates["final_calibration_intercept"].abs()
-        + (candidates["final_calibration_slope"] - 1).abs()
-    )
-    candidates["period_instability"] = (
-        candidates["final_log_loss"] - candidates["development_log_loss"]
-    ).abs()
-    return str(
-        candidates.sort_values(
+        .sort_values(
             [
-                "calibration_distance",
-                "period_instability",
-                "final_log_loss",
+                "development_log_loss",
+                "development_brier_score",
+                "development_calibration_distance",
+                "model",
             ]
-        ).iloc[0]["model"]
+        )
+        .reset_index(drop=True)
     )
+    return str(candidates.loc[0, "model"])
 
 
 def _model_summary(results: pd.DataFrame) -> pd.DataFrame:
     development = (
         results.loc[results["split"].str.startswith("development")]
-        .groupby("model", as_index=False)[["log_loss", "brier_score"]]
+        .groupby("model", as_index=False)[
+            ["log_loss", "brier_score", "calibration_intercept", "calibration_slope"]
+        ]
         .mean()
         .rename(
             columns={
                 "log_loss": "development_log_loss",
                 "brier_score": "development_brier_score",
+                "calibration_intercept": "development_calibration_intercept",
+                "calibration_slope": "development_calibration_slope",
             }
         )
     )
@@ -250,8 +216,8 @@ def run_comparison() -> tuple[pd.DataFrame, dict]:
         "selected_model": selected,
         "model_family": family,
         "selection_rule": (
-            "개발·최종 로그 손실과 브라이어 점수, 보정 절편·기울기, "
-            "기간 안정성 순서"
+            "개발 폴드의 로그 손실, 브라이어 점수, 보정 거리 순서; "
+            "2026 최종 테스트 지표는 선택에 사용하지 않음"
         ),
         "random_state": 42,
         "data_version": "final_training_set_v9",

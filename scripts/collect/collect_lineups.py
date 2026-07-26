@@ -4,6 +4,7 @@ import time
 import pandas as pd
 from tqdm.auto import tqdm
 from pipeline_config import PROJECT_ROOT, RAW_DATA_DIR, load_api_credentials
+from io_utils import atomic_to_csv
 from statiz_api import StatizAPI, StatizAPIError
 
 # 1. 경로 설정
@@ -80,7 +81,7 @@ def run_collection():
             df_final = pd.concat([df_existing, df_new], ignore_index=True)
             # 저장 전 최종 필터링 (확실하게 정규시즌만 남김)
             df_final = df_final[df_final['s_no'].isin(game_ids_master)]
-            df_final.to_csv(output_file, index=False, encoding='utf-8-sig')
+            atomic_to_csv(df_final, output_file)
             df_existing = pd.read_csv(output_file)
             all_lineups = []
             pbar.set_postfix({"Success": success_count})
@@ -91,7 +92,7 @@ def run_collection():
         df_new = pd.DataFrame(all_lineups)
         df_final = pd.concat([df_existing, df_new], ignore_index=True)
         df_final = df_final[df_final['s_no'].isin(game_ids_master)]
-        df_final.to_csv(output_file, index=False, encoding='utf-8-sig')
+        atomic_to_csv(df_final, output_file)
     
     print(f"\n완료: 성공 {success_count}개 / 파일: {output_file}")
 

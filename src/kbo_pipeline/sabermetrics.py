@@ -164,3 +164,92 @@ def calculate_asof_park_factor(
     return data[["s_no", "park_factor", "park_factor_source"]].sort_values(
         "s_no"
     ).reset_index(drop=True)
+
+
+def calculate_asof_kbo_constants(
+    games: pd.DataFrame,
+    pitching: pd.DataFrame,
+    batting: pd.DataFrame,
+) -> pd.DataFrame:
+    """각 경기 기준시각 이전 리그 기록만으로 상수를 계산한다."""
+
+    requests = games[["s_no", "year", "feature_cutoff_datetime"]].copy()
+    requests["feature_cutoff_datetime"] = pd.to_datetime(
+        requests["feature_cutoff_datetime"], errors="coerce", utc=True
+    )
+    requests["_input_order"] = np.arange(len(requests))
+
+    pitching_columns = ["IP", "ER", "HR", "BB", "HP", "SO"]
+    pitching_events = pitching[
+        ["year", "event_datetime", *pitching_columns]
+    ].copy()
+    pitching_events["event_datetime"] = pd.to_datetime(
+        pitching_events["event_datetime"], errors="coerce", utc=True
+    )
+    pitching_totals = (
+        pitching_events.groupby(["year", "event_datetime"], as_index=False)[
+            pitching_columns
+        ]
+        .sum(min_count=1)
+        .sort_values(["event_datetime", "year"])
+    )
+    pitching_totals[pitching_columns] = pitching_totals.groupby(
+        "year", sort=False
+    )[pitching_columns].cumsum()
+
+    batting_events = batting[["year", "event_datetime", "R", "PA"]].copy()
+    batting_events["event_datetime"] = pd.to_datetime(
+        batting_events["event_datetime"], errors="coerce", utc=True
+    )
+    batting_totals = (
+        batting_events.groupby(["year", "event_datetime"], as_index=False)[
+            ["R", "PA"]
+        ]
+        .sum(min_count=1)
+        .sort_values(["event_datetime", "year"])
+    )
+    batting_totals[["R", "PA"]] = batting_totals.groupby(
+        "year", sort=False
+    )[["R", "PA"]].cumsum()
+
+    left = requests.sort_values(["feature_cutoff_datetime", "year"])
+    pitching_asof = pd.merge_asof(
+        left,
+        pitching_totals.sort_values(["event_datetime", "year"]),
+        left_on="feature_cutoff_datetime",
+        right_on="event_datetime",
+        by="year",
+        direction="backward",
+        allow_exact_matches=False,
+    )
+    batting_asof = pd.merge_asof(
+        left,
+        batting_totals.sort_values(["event_datetime", "year"]),
+        left_on="feature_cutoff_datetime",
+        right_on="event_datetime",
+        by="year",
+        direction="backward",
+        allow_exact_matches=False,
+    )
+
+    valid_ip = pitching_asof["IP"].replace(0, np.nan)
+    league_era = pitching_asof["ER"] * 9 / valid_ip
+    fip_component = (
+        13 * pitching_asof["HR"]
+        + 3 * (pitching_asof["BB"] + pitching_asof["HP"])
+        - 2 * pitching_asof["SO"]
+    ) / valid_ip
+    runs_per_pa = batting_asof["R"] / batting_asof["PA"].replace(0, np.nan)
+    scale = (runs_per_pa / REFERENCE_RUNS_PER_PA).clip(0.75, 1.25)
+
+    result = pitching_asof[["s_no", "year", "_input_order"]].copy()
+    result["league_era"] = league_era.to_numpy()
+    result["fip_constant"] = (league_era - fip_component).to_numpy()
+    result["league_runs_per_pa"] = runs_per_pa.to_numpy()
+    for name, base_weight in BASE_LINEAR_WEIGHTS.items():
+        result[name] = scale.to_numpy() * base_weight
+    return (
+        result.sort_values("_input_order")
+        .drop(columns="_input_order")
+        .reset_index(drop=True)
+    )
