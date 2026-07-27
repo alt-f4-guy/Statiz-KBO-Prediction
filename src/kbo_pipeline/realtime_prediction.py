@@ -22,6 +22,57 @@ API_PAYLOAD_COLUMNS = {
 }
 
 
+def prediction_window_is_open(
+    now: pd.Timestamp,
+    game_datetime: pd.Timestamp,
+) -> bool:
+    """경기 시작 전일 때만 신규 예측과 전송을 허용한다."""
+
+    current = pd.Timestamp(now)
+    game_time = pd.Timestamp(game_datetime)
+    if current.tzinfo is None or game_time.tzinfo is None:
+        raise ValueError("예측 시간 판정에는 시간대 정보가 필요합니다.")
+    return bool(current.tz_convert("UTC") < game_time.tz_convert("UTC"))
+
+
+def feature_prior_usage_rate(row: pd.Series | None) -> float:
+    """실시간 피처 행에서 리그 사전분포 출처의 비율을 계산한다."""
+
+    if row is None:
+        return float("nan")
+    source_columns = [
+        column for column in row.index if str(column).endswith("_source")
+    ]
+    if not source_columns:
+        return float("nan")
+    return float(row[source_columns].eq("league_prior").mean())
+
+
+def build_delivery_record(
+    prediction_record: dict[str, Any],
+    *,
+    recorded_at: str,
+    api_status: str,
+    error_type: str = "",
+) -> dict[str, Any]:
+    """최초 예측의 감사 문맥을 보존한 최종 전달 이벤트를 만든다."""
+
+    if api_status not in {"success", "failed"}:
+        raise ValueError("api_status는 success 또는 failed여야 합니다.")
+    record = {
+        key: value
+        for key, value in prediction_record.items()
+        if key not in {"record_type", "recorded_at", "api_status", "error_type"}
+    }
+    return {
+        "recorded_at": recorded_at,
+        "record_type": "delivery",
+        **record,
+        "api_status": api_status,
+        "error_type": error_type,
+    }
+
+
 def build_prediction_payload(
     *,
     ptt_idx: str,

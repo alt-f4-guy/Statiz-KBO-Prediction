@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import time
 from datetime import datetime
 from pathlib import Path
@@ -12,19 +13,24 @@ from zoneinfo import ZoneInfo
 import joblib
 import pandas as pd
 
+from deployment import build_deployment_context, evaluation_role_for
 from fallback_recent10 import recent_ten_home_probability
 from feature_matrix_v9 import _prepare_games, build_feature_matrix_v9
 from pipeline_config import (
     FINAL_DATA_DIR,
     MODEL_DIR,
     OPERATIONS_DIR,
+    PROJECT_ROOT,
     PROCESSED_DATA_DIR,
     RAW_DATA_DIR,
     load_api_credentials,
 )
 from realtime_prediction import (
     append_prediction_log,
+    build_delivery_record,
     build_prediction_payload,
+    feature_prior_usage_rate,
+    prediction_window_is_open,
     select_prediction_probability,
     send_prediction_with_retry,
 )
@@ -106,12 +112,19 @@ def _existing_prediction(history: pd.DataFrame, s_no: int) -> pd.Series | None:
     return None if rows.empty else rows.iloc[0]
 
 
-def _successful_game_ids(history: pd.DataFrame) -> set[int]:
-    if history.empty or "api_status" not in history.columns:
+def _terminal_game_ids(history: pd.DataFrame) -> set[int]:
+    """성공적으로 전달됐거나 경기 시작으로 만료된 경기 ID를 복원한다."""
+
+    if history.empty or "record_type" not in history.columns:
         return set()
     rows = history.loc[
-        history["record_type"].eq("delivery")
-        & history["api_status"].eq("success"),
+        history["record_type"].eq("expired")
+        | (
+            history["record_type"].eq("delivery")
+            & history.get(
+                "api_status", pd.Series(index=history.index, dtype="object")
+            ).eq("success")
+        ),
         "s_no",
     ]
     return set(pd.to_numeric(rows, errors="coerce").dropna().astype(int))
@@ -180,6 +193,18 @@ def run_realtime_prediction_system() -> None:
     metadata = json.loads(
         (MODEL_DIR / "best_model_metadata.json").read_text(encoding="utf-8")
     )
+    git_commit = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=PROJECT_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    deployment_context = build_deployment_context(
+        PROJECT_ROOT,
+        metadata,
+        git_commit,
+    )
     features = list(model.feature_columns)
 
     games = pd.read_csv(RAW_DATA_DIR / "games_master.csv")
@@ -201,7 +226,7 @@ def run_realtime_prediction_system() -> None:
     year = today.strftime("%Y")
     month = today.strftime("%m")
     log_history = _load_prediction_history()
-    processed_s_nos = _successful_game_ids(log_history)
+    terminal_s_nos = _terminal_game_ids(log_history)
 
     while True:
         try:
@@ -221,7 +246,7 @@ def run_realtime_prediction_system() -> None:
         pending = [
             game
             for game in today_games
-            if int(game["s_no"]) not in processed_s_nos
+            if int(game["s_no"]) not in terminal_s_nos
         ]
         if not pending:
             print("오늘 경기 예측 전송 완료")
@@ -233,9 +258,42 @@ def run_realtime_prediction_system() -> None:
             away_team = int(game["awayTeam"])
             home_name = _team_name(home_team, game.get("homeTeamName"))
             away_name = _team_name(away_team, game.get("awayTeamName"))
+            target_reference = _prepare_games(
+                pd.concat(
+                    [games, pd.DataFrame([game])],
+                    ignore_index=True,
+                    sort=False,
+                ).drop_duplicates("s_no", keep="last"),
+                include_unscored=True,
+            )
+            target_time = target_reference.loc[
+                target_reference["s_no"].eq(s_no)
+            ].iloc[0]
+            game_time = pd.Timestamp(target_time["game_datetime"])
+            cutoff = pd.Timestamp(target_time["feature_cutoff_datetime"])
+            now_utc = pd.Timestamp.now(tz="UTC")
+            if not prediction_window_is_open(now_utc, game_time):
+                expired_record = {
+                    "recorded_at": datetime.now(SEOUL).isoformat(),
+                    "record_type": "expired",
+                    "s_no": s_no,
+                    "game_datetime": game_time.isoformat(),
+                    "feature_cutoff_datetime": cutoff.isoformat(),
+                    "api_status": "expired",
+                    **deployment_context,
+                }
+                append_prediction_log(PREDICTION_LOG, expired_record)
+                log_history = pd.concat(
+                    [log_history, pd.DataFrame([expired_record])],
+                    ignore_index=True,
+                )
+                terminal_s_nos.add(s_no)
+                continue
+
             existing = _existing_prediction(log_history, s_no)
 
             if existing is not None:
+                prediction_record = existing.to_dict()
                 probability = float(existing["home_win_probability"])
                 model_type = str(existing["model_type"])
                 fallback_reason = str(existing.get("fallback_reason", "") or "")
@@ -253,19 +311,6 @@ def run_realtime_prediction_system() -> None:
                 if not live_lineup.empty:
                     live_lineup["s_no"] = s_no
 
-                target_reference = _prepare_games(
-                    pd.concat(
-                        [games, pd.DataFrame([game])],
-                        ignore_index=True,
-                        sort=False,
-                    ).drop_duplicates("s_no", keep="last"),
-                    include_unscored=True,
-                )
-                target_time = target_reference.loc[
-                    target_reference["s_no"].eq(s_no)
-                ].iloc[0]
-                game_time = pd.Timestamp(target_time["game_datetime"])
-                cutoff = pd.Timestamp(target_time["feature_cutoff_datetime"])
                 deadline = game_time - pd.Timedelta(
                     minutes=LINEUP_DEADLINE_MINUTES
                 )
@@ -348,6 +393,14 @@ def run_realtime_prediction_system() -> None:
                     ),
                     "predicted_team": payload["predictWinTeam"],
                     "api_status": "pending",
+                    "error_type": "",
+                    "evaluation_role": evaluation_role_for(
+                        pd.Timestamp.now(tz=SEOUL),
+                        deployment_context["prospective_start_date"],
+                    ),
+                    "lineup_complete": bool(complete),
+                    "feature_prior_usage_rate": feature_prior_usage_rate(row),
+                    **deployment_context,
                 }
                 append_prediction_log(PREDICTION_LOG, prediction_record)
                 log_history = pd.concat(
@@ -366,28 +419,31 @@ def run_realtime_prediction_system() -> None:
             try:
                 send_prediction_with_retry(api, payload)
             except StatizAPIError as exc:
+                delivery_record = build_delivery_record(
+                    prediction_record,
+                    recorded_at=datetime.now(SEOUL).isoformat(),
+                    api_status="failed",
+                    error_type=exc.__class__.__name__,
+                )
+                append_prediction_log(PREDICTION_LOG, delivery_record)
+                log_history = pd.concat(
+                    [log_history, pd.DataFrame([delivery_record])],
+                    ignore_index=True,
+                )
                 print(f"s_no={s_no} 예측 전송 실패: {exc}")
                 continue
 
-            delivery_record = {
-                "recorded_at": datetime.now(SEOUL).isoformat(),
-                "record_type": "delivery",
-                "s_no": s_no,
-                "game_datetime": game_datetime,
-                "feature_cutoff_datetime": feature_cutoff,
-                "model_type": model_type,
-                "model_version": metadata["selected_model"],
-                "data_version": metadata["data_version"],
-                "fallback_reason": fallback_reason,
-                "home_win_probability": probability,
-                "selected_team_probability": (
-                    payload["selected_team_probability"] / 100
-                ),
-                "predicted_team": payload["predictWinTeam"],
-                "api_status": "success",
-            }
+            delivery_record = build_delivery_record(
+                prediction_record,
+                recorded_at=datetime.now(SEOUL).isoformat(),
+                api_status="success",
+            )
             append_prediction_log(PREDICTION_LOG, delivery_record)
-            processed_s_nos.add(s_no)
+            log_history = pd.concat(
+                [log_history, pd.DataFrame([delivery_record])],
+                ignore_index=True,
+            )
+            terminal_s_nos.add(s_no)
             print(
                 f"{away_name} @ {home_name}: 홈 승률 {probability:.1%} "
                 f"({model_type})"
