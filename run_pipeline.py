@@ -12,8 +12,56 @@ from rich.table import Table
 PROJECT_ROOT = Path(__file__).resolve().parent
 CORE_SOURCE_DIR = PROJECT_ROOT / "src"
 CORE_MODULE_DIR = CORE_SOURCE_DIR / "kbo_pipeline"
+ENV_PATH = PROJECT_ROOT / "config" / ".env"
+REQUIRED_ENV_NAMES = (
+    "STATIZ_API_KEY",
+    "STATIZ_SECRET",
+    "STATIZ_PTT_IDX",
+)
+DAILY_PHASES: tuple[tuple[str, str], ...] = (
+    ("scripts.collect.collect_schedule", "경기 일정 수집"),
+    ("scripts.collect.collect_lineups", "라인업 데이터 업데이트"),
+    ("scripts.collect.collect_rosters", "로스터 정보 동기화"),
+    ("scripts.collect.collect_player_stats", "선수별 원천 스냅샷 수집"),
+    ("scripts.build.process_raw_data", "원천 스냅샷 v2 정형화"),
+    ("scripts.ops.predict_2026", "실시간 예측 시스템 가동"),
+)
 
 console = Console()
+
+
+def load_runtime_environment(env_path: Path) -> None:
+    """환경파일을 읽되 이미 셸에 설정된 값은 덮어쓰지 않는다."""
+
+    if not env_path.is_file():
+        raise RuntimeError(f"환경파일을 찾을 수 없습니다: {env_path}")
+
+    for line_number, raw_line in enumerate(
+        env_path.read_text(encoding="utf-8").splitlines(),
+        start=1,
+    ):
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        key, separator, value = line.partition("=")
+        key = key.strip()
+        if not separator or not key:
+            raise RuntimeError(
+                f"환경파일 {line_number}행 형식이 올바르지 않습니다."
+            )
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "'\"":
+            value = value[1:-1]
+        os.environ.setdefault(key, value)
+
+    missing = [
+        name for name in REQUIRED_ENV_NAMES if not os.getenv(name, "").strip()
+    ]
+    if missing:
+        raise RuntimeError(
+            "필수 환경변수가 없습니다: " + ", ".join(missing)
+        )
+
 
 def run_script(module_name, description):
     # 정적인 구분선 출력
@@ -48,6 +96,7 @@ def run_script(module_name, description):
         return False, 0
 
 def main():
+    load_runtime_environment(ENV_PATH)
     console.clear()
     console.print(Panel.fit(
         "[bold cyan]⚾ KBO Daily Prediction Pipeline v1.2[/bold cyan]\n"
@@ -55,22 +104,6 @@ def main():
         border_style="cyan",
         padding=(1, 2)
     ))
-
-    phases = [
-        ("scripts.collect.collect_schedule", "경기 일정 수집"),
-        ("scripts.collect.collect_lineups", "라인업 데이터 업데이트"),
-        ("scripts.collect.collect_rosters", "로스터 정보 동기화"),
-        ("scripts.collect.collect_player_stats", "선수별 원천 스냅샷 수집"),
-        ("scripts.build.process_raw_data", "원천 스냅샷 v2 정형화"),
-        ("scripts.build.create_feature_matrix_v9", "시점 기준 v9 피처 생성"),
-        ("scripts.model.tune_hyperparameters", "2025년 순차 검증 분류기 튜닝"),
-        ("scripts.model.train_classifier", "직접 승패 분류기 학습·보정"),
-        ("scripts.model.train_score_models", "득점 분포 비교 모델 학습·보정"),
-        ("scripts.model.compare_models", "공통 경기 확률 지표 비교"),
-        ("scripts.ops.evaluate_fallback_recent10", "최근 10경기 대체 모델 백테스트"),
-        ("scripts.model.backtest", "고정 운영 모델 2026년 평가 재현"),
-        ("scripts.ops.predict_2026", "실시간 예측 시스템 가동")
-    ]
 
     summary_table = Table(title="\n[bold]Pipeline Execution Summary[/bold]", show_header=True, header_style="bold magenta")
     summary_table.add_column("Phase", style="dim", width=5)
@@ -81,7 +114,7 @@ def main():
 
     pipeline_start = time.time()
     
-    for i, (script, desc) in enumerate(phases):
+    for i, (script, desc) in enumerate(DAILY_PHASES):
         success, duration = run_script(script, desc)
         
         status_str = "[bold green]SUCCESS[/bold green]" if success else "[bold red]FAILED[/bold red]"
@@ -90,12 +123,12 @@ def main():
         
         if not success:
             console.print(f"\n[bold red]🛑 {script} 단계에서 중단되었습니다.[/bold red]")
-            break
+            console.print(summary_table)
+            return 1
         
-        # 마지막 예측 시스템은 무한 루프이므로 요약 테이블을 먼저 보여줄 수 없음
-        # 따라서 파이프라인이 중간에 멈췄을 때만 아래 테이블이 나옴
+        # 예측 모듈이 당일 경기의 대기·전송 루프를 마친 뒤 반환하면 종료한다.
         if script == "scripts.ops.predict_2026":
-            return
+            return 0
 
     # 파이프라인 완료 후 요약 출력 (정상 종료 시)
     console.print(summary_table)
@@ -106,6 +139,7 @@ def main():
         border_style="green",
         expand=False
     ))
+    return 0
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

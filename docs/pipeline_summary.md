@@ -18,7 +18,7 @@ percent = P(홈팀 승리) × 100
 
 ```text
 .
-├── run_pipeline.py
+├── run_pipeline.py                  # 일일 수집·정형화·예측 진입점
 ├── config/
 │   ├── .env.example
 │   └── .env                         # 로컬 비밀 파일, Git 무시, 권한 600
@@ -78,7 +78,9 @@ set +a
 chmod 600 config/.env
 ```
 
-코드는 `.env`를 자동으로 읽지 않는다. 수집 또는 실시간 예측을 실행하는 셸에서 먼저 환경변수를 내보내야 한다.
+`python3 run_pipeline.py`는 `config/.env`를 자동으로 읽으며, 이미 셸에
+설정된 환경변수는 덮어쓰지 않는다. 개별 모듈을 직접 실행할 때만 위 명령으로
+환경변수를 먼저 내보낸다.
 
 ## 4. 데이터 파이프라인
 
@@ -164,14 +166,16 @@ split_manifest  = data/final/time_split_manifest.json
 
 ## 7. 실시간 예측과 제출
 
-```bash
-set -a
-source config/.env
-set +a
+저장소 루트에서 다음 명령을 경기 시작 전에 실행한다.
 
-PYTHONPATH=src/kbo_pipeline:src \
-  python3 -m scripts.ops.predict_2026
+```bash
+python3 run_pipeline.py
 ```
+
+이 일일 진입점은 일정, 라인업, 로스터, 선수 기록을 수집하고 원천 데이터를
+정형화한 뒤 실시간 예측을 시작한다. 피처 학습 데이터 재생성, 튜닝, 재학습,
+모델 비교와 백테스트는 실행하지 않으므로 고정 배포 ID와 전향 평가 코호트를
+변경하지 않는다. 중간 단계가 실패하면 종료 코드 `1`로 즉시 중단한다.
 
 경기별 처리 순서는 다음과 같다.
 
@@ -313,16 +317,16 @@ PYTHONPATH=src/kbo_pipeline:src:scripts/model:scripts/ops \
 구문 검사는 다음과 같다.
 
 ```bash
-python3 -m compileall -q src scripts tests
+python3 -m compileall -q run_pipeline.py src scripts tests
 ```
 
 ## 12. 매일 운영 체크리스트
 
 1. `config/.env` 권한이 `600`인지 확인한다.
-2. 환경변수를 현재 셸에 내보낸다.
-3. 읽기 API 스모크 또는 일정 조회가 정상인지 확인한다.
-4. `artifacts/models/best_model.joblib`과 메타데이터가 존재하는지 확인한다.
-5. `scripts.ops.predict_2026`을 경기 시작 전에 실행한다.
+2. `artifacts/models/best_model.joblib`과 메타데이터가 존재하는지 확인한다.
+3. 경기 시작 전에 저장소 루트에서 `python3 run_pipeline.py`를 실행한다.
+4. 일정·라인업·로스터·선수 기록 수집과 원천 정형화가 정상 완료되는지 확인한다.
+5. 읽기 API 일정 조회와 실시간 예측 대기가 정상인지 확인한다.
 6. 예측 후 `prediction`과 `delivery success` 이벤트가 각각 한 행인지 확인한다.
 7. 실패 경기의 최초 확률이 재시도 중 바뀌지 않았는지 확인한다.
 8. 경기 종료 데이터가 수집된 후 전향적 성능 보고서를 갱신한다.
