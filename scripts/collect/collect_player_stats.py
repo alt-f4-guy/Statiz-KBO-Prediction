@@ -1,4 +1,4 @@
-"""라인업과 로스터 선수의 시즌·일별 원천 스냅샷을 수집한다."""
+"""당일 경기 팀 선수의 시즌·일별 원천 스냅샷을 증분 수집한다."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from rich.console import Console
 from pipeline_config import RAW_DATA_DIR, load_api_credentials
 from player_stats_collection import (
     collect_player_snapshots,
-    load_player_population,
+    load_game_day_player_population,
 )
 from statiz_api import StatizAPI
 
@@ -20,16 +20,18 @@ SEOUL = ZoneInfo("Asia/Seoul")
 
 
 def main() -> None:
-    """종료 시즌은 재사용하고 현재 시즌은 실행할 때마다 새로 수집한다."""
+    """당일 경기 팀의 현재·직전 시즌에서 필요한 스냅샷만 수집한다."""
 
     credentials = load_api_credentials()
     api = StatizAPI(credentials.api_key, credentials.secret)
-    current_year = datetime.now(SEOUL).year
-    years = range(2023, current_year + 1)
+    today = datetime.now(SEOUL).date()
+    current_year = today.year
+    years = [current_year - 1, current_year]
 
-    player_numbers = load_player_population(
-        RAW_DATA_DIR / "lineups.csv",
+    player_numbers = load_game_day_player_population(
         RAW_DATA_DIR / "rosters.csv",
+        RAW_DATA_DIR / "games_master.csv",
+        today,
     )
     player_dir = RAW_DATA_DIR / "players"
     day_path = player_dir / "player_day_snapshots.csv"
@@ -43,11 +45,11 @@ def main() -> None:
         current_year,
         day_path,
         season_path,
+        target_date=today,
     )
     if failures:
-        console.print(f"[yellow]재시도 대상 응답: {len(failures)}건[/yellow]")
-    else:
-        console.print("[green]선수 스냅샷 수집 완료[/green]")
+        raise RuntimeError(f"선수 스냅샷 수집 실패: {len(failures)}건")
+    console.print("[green]선수 스냅샷 수집 완료[/green]")
 
 
 if __name__ == "__main__":
