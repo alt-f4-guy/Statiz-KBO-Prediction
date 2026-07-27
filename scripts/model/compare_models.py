@@ -17,6 +17,30 @@ class ModelComparisonError(ValueError):
     """모델 간 공정 비교 계약 위반."""
 
 
+def build_operating_metadata(
+    *,
+    selected: str,
+    family: str,
+    baseline_probability: float,
+) -> dict:
+    """운영 모델의 선택 근거와 프로젝트 상대 산출물 경로를 기록한다."""
+
+    return {
+        "selected_model": selected,
+        "model_family": family,
+        "selection_rule": (
+            "개발 폴드의 로그 손실, 브라이어 점수, 보정 거리 순서; "
+            "2026 최종 테스트 지표는 선택에 사용하지 않음"
+        ),
+        "random_state": 42,
+        "data_version": "final_training_set_v9",
+        "data_path": "data/final/final_training_set_v9.csv",
+        "model_path": "artifacts/models/best_model.joblib",
+        "split_manifest": "data/final/time_split_manifest.json",
+        "baseline_home_probability": float(baseline_probability),
+    }
+
+
 def assert_same_evaluation_games(predictions: pd.DataFrame) -> None:
     """모든 모델이 정확히 같은 경기 ID를 평가했는지 확인한다."""
 
@@ -212,19 +236,11 @@ def run_comparison() -> tuple[pd.DataFrame, dict]:
     )
     target_model = MODEL_DIR / "best_model.joblib"
     shutil.copyfile(source_model, target_model)
-    metadata = {
-        "selected_model": selected,
-        "model_family": family,
-        "selection_rule": (
-            "개발 폴드의 로그 손실, 브라이어 점수, 보정 거리 순서; "
-            "2026 최종 테스트 지표는 선택에 사용하지 않음"
-        ),
-        "random_state": 42,
-        "data_version": "final_training_set_v9",
-        "split_manifest": str(
-            FINAL_DATA_DIR / "time_split_manifest.json"
-        ),
-    }
+    metadata = build_operating_metadata(
+        selected=selected,
+        family=str(family),
+        baseline_probability=float(baseline_probability),
+    )
     (MODEL_DIR / "best_model_metadata.json").write_text(
         json.dumps(metadata, ensure_ascii=False, indent=2),
         encoding="utf-8",

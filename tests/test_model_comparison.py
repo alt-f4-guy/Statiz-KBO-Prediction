@@ -4,6 +4,26 @@ import pandas as pd
 
 
 class ModelComparisonTests(unittest.TestCase):
+    def test_operating_metadata_uses_relative_paths_and_frozen_baseline(self):
+        # 배포 메타데이터가 로컬 절대 경로와 가변 기준선에 의존하면 안 된다.
+        from compare_models import build_operating_metadata
+
+        metadata = build_operating_metadata(
+            selected="catboost",
+            family="direct_classifier",
+            baseline_probability=0.5184,
+        )
+
+        self.assertEqual(
+            metadata["model_path"],
+            "artifacts/models/best_model.joblib",
+        )
+        self.assertEqual(
+            metadata["split_manifest"],
+            "data/final/time_split_manifest.json",
+        )
+        self.assertEqual(metadata["baseline_home_probability"], 0.5184)
+
     def test_models_must_evaluate_identical_game_ids(self):
         # 서로 다른 경기 집합의 지표를 직접 비교하는 오류를 막는다.
         from compare_models import ModelComparisonError, assert_same_evaluation_games
