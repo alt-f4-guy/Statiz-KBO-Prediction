@@ -10,6 +10,7 @@ config/.env.*
 /data/
 /artifacts/
 /archive/
+/verification_logs/
 
 # 개발 도구 상태와 파이썬 캐시
 /\.ua/
@@ -28,3 +29,8 @@ venv/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+
+# 운영 요약만 추적하고 나머지 docs 마크다운은 무시한다.
+/docs/*.md
+/docs/**/*.md
+!/docs/pipeline_summary.md

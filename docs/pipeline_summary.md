@@ -1,126 +1,330 @@
-# ⚾ KBO 예측 시스템 파이프라인 구성 문서 (v1.2)
+# KBO 승리 확률 예측 파이프라인 운영 문서
 
-본 문서는 `run_pipeline.py`를 중심으로 작동하는 KBO 경기 예측 시스템의 전체 데이터 파이프라인 구조와 각 단계별 스크립트의 역할을 정리한 문서입니다.
+## 1. 목적과 현재 운영 모델
 
----
+이 프로젝트는 Statiz 읽기 API와 누적 KBO 경기 데이터를 이용해 경기 시작 전에 홈팀 승리 확률을 생성하고 `prediction/savePrediction`으로 제출한다.
 
-## 📌 1. 전체 파이프라인 워크플로우 (Workflow)
+현재 운영 후보는 v9 피처를 사용하는 CatBoost 직접 승패 분류기다. 목표는 무승부를 제외한 조건부 홈 승리 여부이며, 모델 선택에는 2026년 최종 평가 결과를 사용하지 않는다. 2026년 기존 결과는 공학적 회귀 검사로만 관리하고, 2026-07-28 이후 고정 배포에서 생성된 신규 예측부터 전향적 홀드아웃으로 평가한다.
 
-전체 시스템은 **데이터 수집 ➔ 전처리 및 데이터 복구 ➔ 피처 엔지니어링 ➔ 앙상블 학습 및 실시간 예측**의 4대 단계, 총 7개의 세부 스크립트로 구성됩니다.
+API에 전송하는 `percent`는 예측 승리 팀과 관계없이 항상 다음 값이다.
 
-```mermaid
-graph TD
-    %% 1단계: 수집
-    A[1.collect_schedule.py] -->|games_master.csv| B[2.collect_lineups.py]
-    A -->|games_master.csv| C[3.collect_rosters.py]
-    B -->|lineups.csv| D[4.collect_player_stats.py]
-    
-    %% 2단계: 전처리 및 복구
-    D -->|Raw JSON 데이터| E[5.process_raw_data.py]
-    
-    %% 3단계: 피처 엔지니어링
-    E -->|player_day_processed.csv<br>player_season_processed.csv| F[create_feature_matrix_v7.py]
-    B -->|라인업 데이터 연동| F
-    C -->|로스터 데이터 연동| F
-    
-    %% 4단계: 학습 및 예측
-    F -->|final_training_set_v8.csv| G[predict_2026.py]
-    
-    style A fill:#e1f5fe,stroke:#01579b,stroke-width:2px
-    style E fill:#e8f5e9,stroke:#1b5e20,stroke-width:2px
-    style F fill:#fff3e0,stroke:#e65100,stroke-width:2px
-    style G fill:#fce4ec,stroke:#880e4f,stroke-width:2px
+```text
+percent = P(홈팀 승리) × 100
 ```
 
----
+원정팀이 우세한 `P(Home)=0.40` 사례에서도 `predictWinTeam`은 원정팀, `percent`는 `40.0`이다. 선택 팀의 60% 확률은 운영 로그의 `selected_team_probability`로만 별도 기록하며 API에는 전송하지 않는다.
 
-## 📂 2. 단계별 스크립트 상세 설명
+## 2. 저장소 구조
 
-### [Step 1] 경기 일정 및 결과 수집 (`1.collect_schedule.py`)
-*   **역할**: 2023년부터 현재 연도까지의 KBO 정규시즌 경기 일정 및 결과(스코어 포함)를 수집합니다.
-*   **API 호출**: Statiz API - `prediction/gameSchedule` (연도/월별 호출)
-*   **데이터 필터링**: 정규시즌 경기(`leagueType == '10100'`)만 필터링합니다.
-*   **입출력**:
-    *   **Output**: `data/raw/games_master.csv`
-*   **특이사항**: 중복 데이터는 `s_no`(경기 일련번호) 기준으로 제거하며, 가장 최근 수집된 데이터(경기 완료 후 업데이트된 스코어 포함)를 유지합니다.
+```text
+.
+├── run_pipeline.py
+├── config/
+│   ├── .env.example
+│   └── .env                         # 로컬 비밀 파일, Git 무시, 권한 600
+├── src/kbo_pipeline/
+│   ├── pipeline_config.py           # 공통 경로와 인증 환경변수
+│   ├── statiz_api.py                # 서명, 제한 시간, 제한된 재시도
+│   ├── player_stats_collection.py   # 선수 모집단과 원천 스냅샷
+│   ├── raw_data_processing.py       # 최신 정상 스냅샷 정형화
+│   ├── game_time.py                 # 경기·결과 가용 시각
+│   ├── asof_features.py             # 시점 기준 결합
+│   ├── sabermetrics.py              # 연도 상수와 구장 팩터
+│   ├── feature_matrix_v9.py         # v9 경기 피처
+│   ├── classifier_model.py          # 분류 모델과 보정
+│   ├── score_models.py              # 득점 분포 비교 모델
+│   ├── fallback_recent10.py         # 최근 10경기 대체 확률
+│   ├── realtime_prediction.py       # 페이로드, 시간 게이트, 전달 이벤트
+│   └── deployment.py                # 배포 ID와 체크섬
+├── scripts/
+│   ├── collect/                     # 일정·라인업·로스터·선수 기록 수집
+│   ├── build/                       # 정형화와 v9 피처 생성
+│   ├── model/                       # 튜닝·학습·비교·백테스트
+│   ├── ops/                         # 실시간 예측과 전향적 평가
+│   └── verify/                      # 읽기 API 계약 스모크
+├── data/
+│   ├── raw/
+│   ├── processed/
+│   ├── final/
+│   └── reference/
+├── artifacts/
+│   ├── models/
+│   ├── tuning/
+│   ├── evaluations/
+│   └── operations/
+└── verification_logs/              # 비밀값 없는 로컬 검증 증거
+```
 
-### [Step 2] 선발 라인업 수집 (`2.collect_lineups.py`)
-*   **역할**: `games_master.csv`에서 이미 완료된 경기(스코어가 기록된 경기)의 실제 선발 라인업을 수집합니다.
-*   **API 호출**: Statiz API - `prediction/gameLineup` (경기 s_no별 호출)
-*   **입출력**:
-    *   **Input**: `data/raw/games_master.csv`
-    *   **Output**: `data/raw/lineups.csv`
-*   **특이사항**: 매번 전체를 다시 받는 것이 아니라, 기존에 수집된 경기 ID를 제외한 신규 완료 경기만 부분 수집(Incremental Update)합니다.
+## 3. 인증 설정
 
-### [Step 3] 팀 로스터 정보 동기화 (`3.collect_rosters.py`)
-*   **역할**: 경기일에 등록되어 있던 양 팀의 선수 로스터 정보를 수집합니다.
-*   **API 호출**: Statiz API - `prediction/playerRoster` (팀 코드 및 날짜별 호출)
-*   **입출력**:
-    *   **Input**: `data/raw/games_master.csv`
-    *   **Output**: `data/raw/rosters.csv`
-*   **특이사항**: 경기 일정에 등장하는 모든 날짜와 팀 코드의 고유 조합을 추출한 뒤, 기존 수집 건을 제외하고 API를 호출합니다. API 과호출 방지를 위해 Rate Limit(429) 처리 로직이 포함되어 있습니다.
+필수 환경변수는 다음 세 개다.
 
-### [Step 4] 선수별 상세 스탯 수집 (`4.collect_player_stats.py`)
-*   **역할**: 라인업에 등장하는 모든 선수(`p_no`)의 시즌별 누적 스탯 및 일별 스탯을 수집합니다.
-*   **API 호출**: Statiz API - `prediction/playerSeason`, `prediction/playerDay` (선수 p_no 및 연도별 호출)
-*   **입출력**:
-    *   **Input**: `data/raw/lineups.csv`
-    *   **Output**: 
-        *   `data/raw/players/playerSeason_2023_2026.csv`
-        *   `data/raw/players/playerDay_2023_2026.csv`
-*   **특이사항**: 수집 진행 상황을 `progress_players.json`에 기록하여 중단 시에도 이어서 수집이 가능하도록 구현되어 있습니다.
+```bash
+# config/.env의 값은 출력하거나 커밋하지 않는다.
+set -a
+source config/.env
+set +a
+```
 
-### [Step 5] 원천 데이터 전처리 및 자가 복구 (`5.process_raw_data.py`)
-*   **역할**: 수집된 원천 JSON 데이터를 관계형 데이터프레임(CSV) 형태로 파싱 및 정형화하고, 결측치를 복구합니다.
-*   **입출력**:
-    *   **Input**: `data/raw/players/` 폴더 내 원천 데이터
-    *   **Output**: 
-        *   `data/processed/player_day_processed.csv` (일별 성적)
-        *   `data/processed/player_season_processed.csv` (시즌 성적)
-*   **주요 변환 및 복구 로직**:
-    *   투수 FIP(Fielding Independent Pitching) 계산: 
-        $$\text{FIP} = \frac{13 \times \text{HR} + 3 \times (\text{BB} + \text{HP}) - 2 \times \text{SO}}{\text{IP}} + 3.10$$
-    *   **데이터 자가 복구(Self-Healing)**: 일부 선수의 누적 시즌 데이터가 누락되었을 경우, 일별 데이터(`player_day_processed.csv`)의 스탯을 연도별로 직접 집계(Groupby Sum)하여 시즌 성적 데이터를 자동으로 생성해 채워 넣습니다.
+| 환경변수 | 사용처 |
+|---|---|
+| `STATIZ_API_KEY` | 읽기·쓰기 API 인증 |
+| `STATIZ_SECRET` | 요청 서명 |
+| `STATIZ_PTT_IDX` | 예측 제출 계정 식별자 |
 
-### [Step 6] 피처 매트릭스 생성 (`create_feature_matrix_v7.py`)
-*   **역할**: 머신러닝 학습과 예측에 사용될 최종 독립변수(Features)와 종속변수(Scores)를 결합하여 피처 매트릭스를 빌드합니다.
-*   **입출력**:
-    *   **Input**: `games_master.csv`, `lineups.csv`, `rosters.csv`, 전처리된 일별/시즌 성적
-    *   **Output**: `data/final/final_training_set_v8.csv`
-*   **핵심 피처 엔지니어링**:
-    *   **구장 파크 팩터(Park Factor)**: 구장 코드별 고유 파크 팩터 적용 (예: 대구 0.95, 잠실 1.02 등)
-    *   **투수 하이브리드 FIP**: 선발 투수의 현재 시즌 일별 누적 FIP와 직전 시즌 FIP를 투구 이닝(IP) 수에 따라 가중 블렌딩합니다.
-        *   투구 이닝이 5이닝 미만일 경우 이전 시즌 성적을 크게 반영하며, 5이닝 이상 소화 시 현재 시즌 성적을 100% 반영합니다.
-    *   **타자 하이브리드 wRC**: 라인업에 등장하는 타자들의 누적 OBP(출루율)를 바탕으로 현재 wRC를 계산하고, 직전 시즌 wRC+와 타석(PA) 수에 따라 가중 블렌딩합니다. (10타석 이상 소화 시 현재 성적 100% 반영)
-    *   **팀 불펜 롤링 스탯**: 구원 투수(포지션 $\neq$ 1)들의 경기 데이터를 취합하여, 각 팀의 최근 10경기 불펜 평균자책점(ERA), FIP, 삼진/볼넷 비율(K/BB)을 롤링 윈도우로 계산합니다.
-    *   **최종 피처 차이 변수**: 홈/어웨이 선발 FIP 차이(`sp_fip_diff`), 불펜 ERA 차이(`rp_era_diff`), 타선 파워 차이(`batting_diff`) 및 가중 합산인 `total_diff`를 생성합니다.
+`config/.env` 권한은 `600`이어야 한다.
 
-### [Step 7] 실시간 승패 예측 시스템 가동 (`predict_2026.py`)
-*   **역할**: 앙상블 모델을 학습시키고, 당일 실시간으로 Statiz에서 라인업이 등록되면 예측을 수행해 결과를 API로 전송하는 무한 루프 시스템입니다.
-*   **예측 모델 구조**:
-    *   **4종 앙상블**: CatBoost, XGBoost, LightGBM, Ridge Regressor
-    *   각 모델은 `homeScore`와 `awayScore`를 각각 예측하도록 학습됩니다.
-    *   `best_hyperparameters.csv`에 저장된 최적 하이퍼파라미터와 연도별 샘플 가중치를 적용하여 사전 학습을 마칩니다.
-*   **확률 산출 방식**:
-    *   앙상블 모델들이 예측한 홈 득점 기댓값($\mu_{home}$)과 어웨이 득점 기댓값($\mu_{away}$)을 바탕으로 **Skellam 분포**를 적용하여 홈팀의 승리 확률 및 어웨이팀의 승리 확률을 도출합니다.
-*   **프로세스 흐름**:
-    1.  오늘 경기 일정 조회 (API: `prediction/gameSchedule`)
-    2.  경기별 선발 라인업 실시간 감시 (API: `prediction/gameLineup`)
-    3.  양 팀의 라인업이 모두 등록(각 9명 이상)되면 피처 매트릭스를 즉석에서 병합 및 생성.
-    4.  학습된 4종 모델에 입력하여 승리 확률 계산.
-    5.  결과 저장 API 호출 (`prediction/savePrediction`)하여 서버에 예측 데이터 전송.
-    6.  완료된 경기는 세트에 추가하여 제외하고, 60초마다 루프 반복.
+```bash
+chmod 600 config/.env
+```
 
----
+코드는 `.env`를 자동으로 읽지 않는다. 수집 또는 실시간 예측을 실행하는 셸에서 먼저 환경변수를 내보내야 한다.
 
-## 🔄 3. 데이터 파이프라인 입출력 요약 표
+## 4. 데이터 파이프라인
 
-| 단계 | 실행 스크립트 | 입력 데이터 | 출력 데이터 (산출물) | 주요 API 엔드포인트 |
-| :--- | :--- | :--- | :--- | :--- |
-| **1** | `1.collect_schedule.py` | 없음 (새 파일 생성/누적) | `data/raw/games_master.csv` | `prediction/gameSchedule` |
-| **2** | `2.collect_lineups.py` | `games_master.csv` | `data/raw/lineups.csv` | `prediction/gameLineup` |
-| **3** | `3.collect_rosters.py` | `games_master.csv` | `data/raw/rosters.csv` | `prediction/playerRoster` |
-| **4** | `4.collect_player_stats.py` | `lineups.csv` | `playerSeason_2023_2026.csv`<br>`playerDay_2023_2026.csv` | `prediction/playerSeason`<br>`prediction/playerDay` |
-| **5** | `5.process_raw_data.py` | `playerSeason_2023_2026.csv`<br>`playerDay_2023_2026.csv` | `player_day_processed.csv`<br>`player_season_processed.csv` | 없음 (로컬 전처리) |
-| **6** | `create_feature_matrix_v7.py`| `games_master.csv`, `lineups.csv`<br>`rosters.csv`, 전처리 데이터 | `data/final/final_training_set_v8.csv` | 없음 (로컬 피처 빌드) |
-| **7** | `predict_2026.py` | `final_training_set_v8.csv`<br>`best_hyperparameters.csv` | 예측 결과 API 전송 | `prediction/gameSchedule`<br>`prediction/gameLineup`<br>`prediction/savePrediction` |
+### 4.1 수집
+
+| 순서 | 모듈 | 입력 | 출력 |
+|---:|---|---|---|
+| 1 | `scripts.collect.collect_schedule` | Statiz 일정 API | `data/raw/games_master.csv` |
+| 2 | `scripts.collect.collect_lineups` | 종료 경기 | `data/raw/lineups.csv` |
+| 3 | `scripts.collect.collect_rosters` | 경기일·팀 | `data/raw/rosters.csv` |
+| 4 | `scripts.collect.collect_player_stats` | 라인업·로스터 선수 합집합 | 선수 일별·시즌 스냅샷 |
+
+현재 시즌 선수 기록은 실행할 때마다 새 `fetched_at`으로 수집한다. 종료 시즌의 정상 선수-연도는 다시 호출하지 않으며, 오류 스냅샷은 완료로 간주하지 않아 다음 실행에서 재시도한다.
+
+`playerDay` 실제 응답은 각 `s_no`를 행의 열로 주지 않고 숫자 경기 ID를 최상위 JSON 키로 사용한다. 정형화 단계는 이 키를 `s_no_key`로 보존한다.
+
+### 4.2 정형화와 v9 피처
+
+```bash
+PYTHONPATH=src/kbo_pipeline:src \
+  python3 -m scripts.build.process_raw_data
+
+PYTHONPATH=src/kbo_pipeline:src \
+  python3 -m scripts.build.create_feature_matrix_v9
+```
+
+v9 피처는 각 경기의 `feature_cutoff_datetime`보다 먼저 이용 가능했던 기록만 사용한다.
+
+- 선발: 현재 시즌과 직전 시즌 투구 기록의 시점 기준 결합
+- 타선: 실제 선발 타자들의 시점 기준 출루·장타·선형 가중 지표
+- 불펜: 경기일 로스터에서 당일 선발과 선발 역할 투수를 제외한 후보군
+- 피로도: 1일·3일·최근 10경기 투구 이닝과 투구 수
+- 환경: 경기 이전 결과로만 계산한 구장 팩터와 연도 리그 상수
+- 감사 열: 각 피처 그룹의 출처와 결측 여부
+
+더블헤더 2차전 피처는 당일 1차전 시작 전으로 동결하며, 서스펜디드 경기는 재개 시각이 아니라 최초 시작 시각을 기준으로 한다.
+
+## 5. 모델 학습과 선택
+
+시간 분할 원칙은 다음과 같다.
+
+1. 2023~2025년을 개발·보정 구간으로 사용한다.
+2. 같은 경기일은 서로 다른 분할에 나누지 않는다.
+3. 각 개발 폴드의 학습 시각은 검증 시각보다 빠르다.
+4. 2026년 결과는 튜닝·피처 선택·보정에 사용하지 않는다.
+5. 모든 모델과 재표본의 시드는 42다.
+
+현재 저장된 공학적 회귀 검사 결과는 다음과 같다.
+
+| 모델 | 개발 로그 손실 | 개발 브라이어 | 2026 로그 손실 | 2026 브라이어 | 2026 ROC AUC | 정확도 |
+|---|---:|---:|---:|---:|---:|---:|
+| CatBoost | 0.675058 | 0.241126 | 0.684634 | 0.245763 | 0.584988 | 0.568493 |
+| 로지스틱 | 0.718816 | 0.259393 | 0.684957 | 0.245913 | 0.583090 | 0.573059 |
+| 음이항 득점 | 0.786685 | 0.274557 | 0.688316 | 0.247589 | 0.598611 | 0.536530 |
+| 포아송 CatBoost 득점 | 0.694530 | 0.249909 | 0.692261 | 0.249443 | 0.547584 | 0.547945 |
+| 고정 홈 승률 기준선 | 해당 없음 | 해당 없음 | 0.692985 | 0.249919 | 0.500000 | 0.511416 |
+
+이 표는 운영 후보를 다시 선택하기 위한 자료가 아니다. 운영 모델은 개발 폴드의 로그 손실, 브라이어 점수와 보정 거리 순으로 선택했으며, 2026 결과는 선택 완료 후 공학적 회귀 검사에만 사용했다.
+
+## 6. 배포 버전과 전향적 시작
+
+`artifacts/models/best_model_metadata.json`은 프로젝트 상대 경로를 사용한다.
+
+```text
+data_path       = data/final/final_training_set_v9.csv
+model_path      = artifacts/models/best_model.joblib
+split_manifest  = data/final/time_split_manifest.json
+```
+
+배포 문맥에는 다음 값이 들어간다.
+
+- Git 커밋
+- 모델 SHA-256
+- v9 데이터 SHA-256
+- 시간 분할 명세 SHA-256
+- 고정 홈 승률 기준선
+- 전향적 시작일
+- 위 값을 해시한 16자리 `deployment_id`
+
+현재 전향적 시작일은 `2026-07-28`이다. 코드·모델·보정기·피처 정의가 바뀌면 새 배포 ID와 새 시작일을 발급해야 한다.
+
+고정 기준선은 2023~2025년 비무승부 2,116경기의 홈 승률 `0.5184310018903592`다. 전향적 결과로 이 값을 갱신하지 않는다.
+
+## 7. 실시간 예측과 제출
+
+```bash
+set -a
+source config/.env
+set +a
+
+PYTHONPATH=src/kbo_pipeline:src \
+  python3 -m scripts.ops.predict_2026
+```
+
+경기별 처리 순서는 다음과 같다.
+
+1. 당일 일정을 조회한다.
+2. 경기 시작 시각을 UTC 기준으로 비교한다.
+3. 현재 시각이 경기 시작 시각 이상이면 `expired` 이벤트만 기록하고 예측·전송하지 않는다.
+4. 라인업 마감 전에는 완성된 양 팀 라인업을 기다린다.
+5. 정상 피처가 만들어지면 주 모델을 사용한다.
+6. 라인업 마감 초과, 피처 품질 실패 또는 주 모델 추론 실패 시 대체 모델을 사용한다.
+7. 최초 예측을 API 호출 전에 추가 전용 로그에 기록한다.
+8. 동일 페이로드로 최대 세 번 제한 재시도한다.
+9. 최종 `success` 또는 `failed` 전달 이벤트를 별도 행으로 기록한다.
+
+기존 경기 전 예측은 프로세스 재시작 후에도 다시 계산하지 않는다. 경기 시작 이후에는 기존 예측도 재전송하지 않는다.
+
+### 7.1 최근 10경기 대체 모델
+
+대체 모델은 양 팀이 각자 경기 기준시각 전에 결과가 확정된 최근 10경기의 승률을 라플라스 평활해 결합한다.
+
+- 한 팀이라도 과거 경기가 5경기 미만이면 고정 학습 구간 홈 승률을 사용한다.
+- 최종 확률은 `[0.35, 0.65]`로 제한한다.
+- `fallback_reason`은 반드시 기록한다.
+- API 재시도에서는 최초 확률을 그대로 재사용한다.
+
+저장된 대체 모델 공학적 백테스트 결과는 다음과 같다.
+
+| 로그 손실 | 브라이어 | 보정 절편 | 보정 기울기 | ROC AUC | 정확도 |
+|---:|---:|---:|---:|---:|---:|
+| 0.696892 | 0.251696 | 0.068658 | 0.381101 | 0.543302 | 0.548204 |
+
+## 8. 운영 로그
+
+운영 로그 경로는 `artifacts/operations/prediction_log.csv`다. 기존 행을 수정하지 않고 이벤트를 추가한다.
+
+| 이벤트 | 의미 |
+|---|---|
+| `prediction` | 경기 전 고정된 최초 예측 |
+| `delivery` + `success` | API 최종 저장 성공 |
+| `delivery` + `failed` | 제한 재시도 후 최종 실패 |
+| `expired` | 경기 시작 이후라 예측·전송하지 않음 |
+
+최초 예측에는 다음 감사 정보가 포함된다.
+
+- `deployment_id`
+- `evaluation_role`
+- `prospective_start_date`
+- `git_commit`
+- 모델·데이터·분할 명세 체크섬
+- `lineup_complete`
+- `feature_prior_usage_rate`
+- `model_type`
+- `fallback_reason`
+- 홈 승리 확률과 선택 팀 확률
+
+로그에는 인증값, 서명 헤더와 전체 API 응답을 기록하지 않는다.
+
+## 9. 전향적 성능 평가
+
+```bash
+PYTHONPATH=src/kbo_pipeline:src:scripts/ops \
+  python3 -m scripts.ops.evaluate_prediction_log
+```
+
+평가 대상은 다음 조건을 모두 만족해야 한다.
+
+- `record_type == prediction`
+- 지정 배포 ID와 일치
+- `evaluation_role == prospective_holdout`
+- 전향적 시작일 이후
+- `recorded_at < game_datetime`
+- 동일 경기의 최초 예측
+- 종료된 비무승부 경기
+
+보고서는 전체와 모델 유형별로 주간·월간·전체 지표를 생성한다.
+
+| 영역 | 지표 |
+|---|---|
+| 확률 품질 | 로그 손실, 브라이어 점수 |
+| 보정 | 보정 절편, 보정 기울기, 10구간 실제 홈 승률 |
+| 판별력 | ROC AUC |
+| 운영 | 정확도, 대체 모델 사용률, API 저장 성공률 |
+| 데이터 | 라인업 완성률, 피처 사전분포 사용률 |
+
+단일 클래스 또는 10경기 미만 구간에서는 보정 절편·기울기와 ROC AUC를 `NaN`으로 기록하되 보고서 생성을 중단하지 않는다.
+
+### 9.1 기준선 비교
+
+손실 차이는 다음 방향으로 고정한다.
+
+```text
+로그 손실 차이 = 모델 로그 손실 - 기준선 로그 손실
+브라이어 차이 = 모델 브라이어 점수 - 기준선 브라이어 점수
+```
+
+음수는 모델 우위, 양수는 기준선 우위다. 경기일을 블록으로 하는 짝지은 부트스트랩 2,000회와 시드 42로 95% 신뢰구간을 계산한다.
+
+### 9.2 운영 판정 우선순위
+
+100경기 미만에는 `추가 관찰`만 반환한다. 이후 판정 우선순위는 다음과 같다.
+
+1. 데이터 파이프라인 점검
+2. 모델 재검토
+3. 재보정 검토
+4. 추가 관찰
+5. 유지
+
+| 판정 | 조건 |
+|---|---|
+| 데이터 파이프라인 점검 | 월간 대체 모델 사용률 20% 초과 또는 피처 사전분포 사용률이 직전 4주보다 10%포인트 초과 증가 |
+| 추가 관찰 | 300경기 미만, 신뢰구간이 0을 포함하거나 명확한 모델 우위가 없음 |
+| 모델 재검토 | 300경기 이상이고 로그 손실·브라이어 차이의 95% 신뢰구간 하한이 모두 0보다 큼 |
+| 재보정 검토 | 300경기 이상이고 보정 절편 절댓값이 0.10 초과 또는 보정 기울기가 0.8~1.2 밖 |
+| 유지 | 300경기 이상이고 한 확률 지표가 명확히 개선되며 다른 지표가 명확히 악화되지 않음 |
+
+## 10. 읽기 API 계약 검증
+
+```bash
+set -a
+source config/.env
+set +a
+
+PYTHONPATH=src/kbo_pipeline:src \
+  python3 -m scripts.verify.read_api_contract
+```
+
+검증 결과는 `verification_logs/read_api_contract.json`에 저장된다. 일정, 라인업, 로스터, 선수 일별, 선수 시즌 API의 HTTP 상태, `result_cd`, 필수 필드와 행 수만 기록한다.
+
+2026-07-27 실제 검증에서 다섯 엔드포인트가 모두 HTTP 200, `result_cd=100`, 필수 필드 확인에 성공했다.
+
+## 11. 테스트
+
+전체 테스트의 표준 명령은 다음과 같다.
+
+```bash
+PYTHONPATH=src/kbo_pipeline:src:scripts/model:scripts/ops \
+  python3 -m unittest discover -s tests -v
+```
+
+구문 검사는 다음과 같다.
+
+```bash
+python3 -m compileall -q src scripts tests
+```
+
+## 12. 매일 운영 체크리스트
+
+1. `config/.env` 권한이 `600`인지 확인한다.
+2. 환경변수를 현재 셸에 내보낸다.
+3. 읽기 API 스모크 또는 일정 조회가 정상인지 확인한다.
+4. `artifacts/models/best_model.joblib`과 메타데이터가 존재하는지 확인한다.
+5. `scripts.ops.predict_2026`을 경기 시작 전에 실행한다.
+6. 예측 후 `prediction`과 `delivery success` 이벤트가 각각 한 행인지 확인한다.
+7. 실패 경기의 최초 확률이 재시도 중 바뀌지 않았는지 확인한다.
+8. 경기 종료 데이터가 수집된 후 전향적 성능 보고서를 갱신한다.
+
+실제 쓰기 API 계약은 제출 가능한 경기에서 확인해야 한다. 오늘 읽기 API 검증만 완료했으므로, 첫 운영 경기에서는 `percent=P(Home)×100`, 성공 전달 이벤트와 운영 화면 표시를 함께 확인한다.
