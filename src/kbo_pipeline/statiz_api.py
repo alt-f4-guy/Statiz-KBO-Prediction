@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import logging
+import math
 import time
 from typing import Any, Callable, Mapping
 from urllib.parse import quote
@@ -94,6 +95,22 @@ class StatizAPI:
         except ValueError as exc:
             raise StatizAPIError(f"{path} 응답이 JSON 형식이 아닙니다.") from exc
 
+    @staticmethod
+    def _rate_limit_delay(
+        response: requests.Response,
+        fallback: float,
+    ) -> float:
+        """429 응답의 서버 쿨다운을 읽고 유효하지 않으면 대체값을 쓴다."""
+
+        try:
+            payload = response.json()
+            cooldown = float(payload["rate_limit"]["cooldown_sec"])
+        except (KeyError, TypeError, ValueError):
+            return float(fallback)
+        if not math.isfinite(cooldown) or cooldown <= 0:
+            return float(fallback)
+        return min(300.0, cooldown)
+
     def get(self, path: str, params: Mapping[str, Any]) -> Any:
         normalized, query_string = self._query_string(params)
         url = f"{self.base_url}/{path}"
@@ -114,8 +131,16 @@ class StatizAPI:
                 continue
 
             if response.status_code == 429 and attempt < self.max_retries:
-                LOGGER.warning("%s 요청 제한 응답, 재시도합니다.", path)
-                self.sleep(min(60.0, 2**attempt))
+                delay = self._rate_limit_delay(
+                    response,
+                    fallback=min(60.0, 2**attempt),
+                )
+                LOGGER.warning(
+                    "%s 요청 제한 응답, %.1f초 후 재시도합니다.",
+                    path,
+                    delay,
+                )
+                self.sleep(delay)
                 continue
             return self._decode(response, path)
 

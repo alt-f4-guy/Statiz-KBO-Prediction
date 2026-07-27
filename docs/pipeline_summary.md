@@ -93,6 +93,11 @@ chmod 600 config/.env
 | 3 | `scripts.collect.collect_rosters` | 경기일·팀 | `data/raw/rosters.csv` |
 | 4 | `scripts.collect.collect_player_stats` | 라인업·로스터 선수 합집합 | 선수 일별·시즌 스냅샷 |
 
+일정은 `games_master.csv`가 없을 때만 2023년부터 전체 수집한다. 기존 파일이
+있으면 현재 월과 미종료 상태가 남은 과거 월만 요청하며, 취소 상태 `4`는
+재수집 대상에서 제외한다. HTTP 429 응답은 서버의 `cooldown_sec`만큼 기다린
+뒤 같은 요청을 재시도하므로 일일 실행은 일반적으로 현재 월 한 번만 호출한다.
+
 현재 시즌 선수 기록은 실행할 때마다 새 `fetched_at`으로 수집한다. 종료 시즌의 정상 선수-연도는 다시 호출하지 않으며, 오류 스냅샷은 완료로 간주하지 않아 다음 실행에서 재시도한다.
 
 `playerDay` 실제 응답은 각 `s_no`를 행의 열로 주지 않고 숫자 경기 ID를 최상위 JSON 키로 사용한다. 정형화 단계는 이 키를 `s_no_key`로 보존한다.

@@ -7,11 +7,53 @@ from rich.table import Table
 from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, TimeElapsedColumn
 from pipeline_config import RAW_DATA_DIR, load_api_credentials
 from io_utils import atomic_to_csv
-from statiz_api import StatizAPI, StatizAPIError
+from statiz_api import StatizAPI
 
 console = Console()
 
 RAW_DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def schedule_months_to_fetch(
+    existing: pd.DataFrame,
+    now: datetime,
+) -> list[tuple[str, str]]:
+    """현재 월과 점수가 확정되지 않은 과거 경기 월을 반환한다."""
+
+    current = (now.year, now.month)
+    if existing.empty:
+        periods = pd.period_range(
+            "2023-01",
+            pd.Period(f"{now.year}-{now.month:02d}", freq="M"),
+            freq="M",
+        )
+        return [
+            (str(period.year), f"{period.month:02d}")
+            for period in periods
+        ]
+
+    years = pd.to_numeric(existing["year"], errors="coerce")
+    months = pd.to_numeric(existing["month"], errors="coerce")
+    states = pd.to_numeric(existing["state"], errors="coerce")
+    unfinished = (
+        existing["homeScore"].isna() | existing["awayScore"].isna()
+    ) & states.ne(4)
+    valid = (
+        unfinished
+        & years.notna()
+        & months.between(1, 12)
+        & ((years * 12 + months) <= (now.year * 12 + now.month))
+        & ((years * 12 + months) >= (2023 * 12 + 1))
+    )
+    unfinished_months = set(
+        zip(
+            years.loc[valid].astype(int),
+            months.loc[valid].astype(int),
+        )
+    )
+    targets = sorted(unfinished_months | {current})
+    return [(str(year), f"{month:02d}") for year, month in targets]
+
 
 def run_schedule_collection():
     credentials = load_api_credentials()
@@ -27,9 +69,7 @@ def run_schedule_collection():
         console.print("🆕 [bold yellow]새로운 games_master.csv 파일을 생성합니다.[/bold yellow]")
 
     all_games = []
-    current_year = datetime.now().year
-    years = [str(y) for y in range(2023, current_year + 1)]
-    months = [f"{m:02d}" for m in range(1, 13)]
+    target_months = schedule_months_to_fetch(existing_df, datetime.now())
 
     with Progress(
         SpinnerColumn(),
@@ -39,31 +79,27 @@ def run_schedule_collection():
         TimeElapsedColumn(),
         console=console
     ) as progress:
-        total_steps = len(years) * 12
-        task = progress.add_task("[cyan]Fetching schedules...", total=total_steps)
-        
-        for year in years:
-            for month in months:
-                if year == str(current_year) and int(month) > datetime.now().month:
-                    progress.advance(task)
-                    continue
-                
-                progress.update(task, description=f"[cyan]Fetching {year}-{month}...")
-                try:
-                    data = api.get(
-                        "prediction/gameSchedule",
-                        {"year": year, "month": month},
-                    )
-                except StatizAPIError as exc:
-                    console.print(f"[red]{year}-{month} 수집 실패: {exc}[/red]")
-                    data = None
-                
-                if data and isinstance(data, dict):
-                    for date_key, games in data.items():
-                        if isinstance(games, list): all_games.extend(games)
-                
-                time.sleep(0.1)
-                progress.advance(task)
+        task = progress.add_task(
+            "[cyan]Fetching schedules...",
+            total=len(target_months),
+        )
+
+        for year, month in target_months:
+            progress.update(
+                task,
+                description=f"[cyan]Fetching {year}-{month}...",
+            )
+            data = api.get(
+                "prediction/gameSchedule",
+                {"year": year, "month": month},
+            )
+            if data and isinstance(data, dict):
+                for games in data.values():
+                    if isinstance(games, list):
+                        all_games.extend(games)
+
+            time.sleep(0.1)
+            progress.advance(task)
 
     if all_games:
         new_df = pd.DataFrame(all_games)

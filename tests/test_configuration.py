@@ -52,6 +52,91 @@ class ConfigurationTests(unittest.TestCase):
 
         self.assertEqual(session.timeout, (3.05, 30))
 
+    def test_http_429_uses_server_cooldown_before_retry(self):
+        # 서버가 지정한 쿨다운보다 일찍 재요청하면 제한 상태가 반복된다.
+        from statiz_api import StatizAPI
+
+        class Response:
+            def __init__(self, status_code, payload):
+                self.status_code = status_code
+                self.payload = payload
+                self.text = ""
+
+            def json(self):
+                return self.payload
+
+        class Session:
+            def __init__(self):
+                self.responses = [
+                    Response(
+                        429,
+                        {
+                            "rate_limit": {
+                                "type": "burst",
+                                "cooldown_sec": 53,
+                            },
+                            "result_cd": 429,
+                        },
+                    ),
+                    Response(200, {"result_cd": 100}),
+                ]
+
+            def get(self, *args, **kwargs):
+                return self.responses.pop(0)
+
+        waits = []
+        client = StatizAPI(
+            "key",
+            "secret",
+            max_retries=1,
+            session=Session(),
+            sleep=waits.append,
+        )
+
+        result = client.get(
+            "prediction/gameSchedule",
+            {"year": 2026, "month": "07"},
+        )
+
+        self.assertEqual(result, {"result_cd": 100})
+        self.assertEqual(waits, [53.0])
+
+    def test_http_429_caps_server_cooldown_at_five_minutes(self):
+        # 비정상적으로 큰 서버 값이 프로세스를 무기한 멈추면 안 된다.
+        from statiz_api import StatizAPI, StatizAPIError
+
+        class Response:
+            status_code = 429
+            text = ""
+
+            @staticmethod
+            def json():
+                return {
+                    "rate_limit": {"cooldown_sec": 600},
+                    "result_cd": 429,
+                }
+
+        class Session:
+            def get(self, *args, **kwargs):
+                return Response()
+
+        waits = []
+        client = StatizAPI(
+            "key",
+            "secret",
+            max_retries=1,
+            session=Session(),
+            sleep=waits.append,
+        )
+
+        with self.assertRaisesRegex(StatizAPIError, "HTTP 429"):
+            client.get(
+                "prediction/gameSchedule",
+                {"year": 2026, "month": "07"},
+            )
+
+        self.assertEqual(waits, [300.0])
+
 
 if __name__ == "__main__":
     unittest.main()
