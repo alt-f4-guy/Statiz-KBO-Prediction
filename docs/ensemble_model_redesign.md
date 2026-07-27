@@ -31,7 +31,7 @@
 
 ## ⚙️ 3. 변경안별 모델 세부 설계 및 하이퍼파라미터 튜닝 범위
 
-각 변경안 도입 시 [tune_hyperparameters.py](file:///Users/wiww1030/Desktop/0615_튜닝%20과정%20재설계/tune_hyperparameters.py)에서 탐색하게 될 핵심 파라미터 범위를 지정합니다.
+각 변경안 도입 시 [tune_hyperparameters.py](../scripts/model/tune_hyperparameters.py)에서 탐색하게 될 핵심 파라미터 범위를 지정합니다.
 
 ### 1) Option A: SVR 도입 세부 파라미터
 소규모 데이터셋에서 강력한 경계선을 도출하기 위해 scikit-learn의 `SVR` 모델을 결합합니다.
@@ -84,17 +84,17 @@ mlp_params = {
 
 선택된 재설계안을 작업 공간 내 소스코드 파일들에 외과수술적으로 반영하기 위해 다음과 같이 수정을 수행합니다.
 
-### Step 1: [tune_hyperparameters.py](file:///Users/wiww1030/Desktop/0615_튜닝%20과정%20재설계/tune_hyperparameters.py) 수정
+### Step 1: [tune_hyperparameters.py](../scripts/model/tune_hyperparameters.py) 수정
 * XGBoostRegressor 수입 및 선언 제거.
 * Random Forest Regressor 및 (SVR 또는 MLP) Regressor 추가.
 * Optuna `objective` 내에 모델 학습 루프 및 앙상블 가중치 블렌딩 로직 변경.
-* 최종 탐색 완료 후 [best_hyperparameters.csv](file:///Users/wiww1030/Desktop/0615_튜닝%20과정%20재설계/best_hyperparameters.csv)에 저장되는 형식 동기화.
+* 최종 탐색 완료 후 `best_hyperparameters.csv`에 저장되는 형식 동기화.
 
-### Step 2: [backtest.py](file:///Users/wiww1030/Desktop/0615_튜닝%20과정%20재설계/backtest.py) 수정
+### Step 2: [backtest.py](../scripts/model/backtest.py) 수정
 * 백업 파라미터 매핑 딕셔너리(`DEFAULT_PARAMS`)를 신규 모델 구성 규격에 맞춰 갱신.
 * 시계열 검증용 Walk-forward 루프 안의 개별 모델 학습 및 앙상블 예측 구문 업데이트.
 * 백테스트 진행 추이를 보여주는 Rich 라이브러리 테이블 헤더 및 데이터 매핑 동기화.
 
-### Step 3: [predict_2026.py](file:///Users/wiww1030/Desktop/0615_튜닝%20과정%20재설계/predict_2026.py) 수정
+### Step 3: [predict_2026.py](../scripts/ops/predict_2026.py) 수정
 * 백 watchdog 시작 전, 갱신된 신규 앙상블 4~5개 모델로 사전 학습을 수행하도록 초기화 블록 수정.
 * 당일 라인업 수집 완료 즉시 동작하는 실시간 추론 부분에서 Ridge 가공 데이터와 트리용 데이터를 다변화하여 결합 연산 수행.

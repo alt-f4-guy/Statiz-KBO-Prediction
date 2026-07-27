@@ -1,6 +1,6 @@
 # ⚾ KBO 경기 예측 파이프라인 적대적 리뷰 (Adversarial Review)
 
-본 문서는 현재 KBO 경기 예측 파이프라인([create_feature_matrix_v7.py](file:///Users/wiww1030/Desktop/test/create_feature_matrix_v7.py), [tune_hyperparameters.py](file:///Users/wiww1030/Desktop/test/tune_hyperparameters.py), [predict_2026.py](file:///Users/wiww1030/Desktop/test/predict_2026.py), [backtest.py](file:///Users/wiww1030/Desktop/test/backtest.py))의 **사용 변수(Features), 모델 구조 및 확률 추정 방식, 튜닝 및 백테스팅 검증 체계**에 대해 심층 분석하고 구조적 결함과 데이터 누수(Data Leakage) 요소를 파헤친 적대적 리뷰(Adversarial Review) 보고서입니다.
+본 문서는 현재 KBO 경기 예측 파이프라인(`create_feature_matrix_v7.py`, [tune_hyperparameters.py](../scripts/model/tune_hyperparameters.py), [predict_2026.py](../scripts/ops/predict_2026.py), [backtest.py](../scripts/model/backtest.py))의 **사용 변수(Features), 모델 구조 및 확률 추정 방식, 튜닝 및 백테스팅 검증 체계**에 대해 심층 분석하고 구조적 결함과 데이터 누수(Data Leakage) 요소를 파헤친 적대적 리뷰(Adversarial Review) 보고서입니다.
 
 ---
 
@@ -18,14 +18,14 @@
 ### 2.1. 변수 생성을 포함한 피처 엔지니어링 (Feature Architecture & Data Leakage)
 
 #### 1. 실전 배치 시 피처 붕괴 (Real-time Feature Degeneration Leakage)
-* **코드 위치**: [create_feature_matrix_v7.py:L38-L52](file:///Users/wiww1030/Desktop/test/create_feature_matrix_v7.py#L38-L52), [predict_2026.py:L190-L196](file:///Users/wiww1030/Desktop/test/predict_2026.py#L190-L196)
+* **코드 위치**: `create_feature_matrix_v7.py:L38-L52`, [predict_2026.py](../scripts/ops/predict_2026.py)
 * **문제점**:
   - `p_lookup`과 `b_lookup` 변수는 경기가 완료된 후 수집되는 일별 데이터(`player_day_processed.csv`)의 경기 키(`s_no_key`)를 기반으로 결합됩니다.
-  - 그러나 실시간 라이브 예측 시점([predict_2026.py](file:///Users/wiww1030/Desktop/test/predict_2026.py))에서는 당일 경기 기록이 당연히 존재하지 않으므로, `p_lookup.get((sp_no, s_no_val), 5.2)` 조회 시 키를 찾지 못하고 **무조건 디폴트값(FIP 5.2, wRC 92)**으로 붕괴됩니다.
+  - 그러나 실시간 라이브 예측 시점([predict_2026.py](../scripts/ops/predict_2026.py))에서는 당일 경기 기록이 당연히 존재하지 않으므로, `p_lookup.get((sp_no, s_no_val), 5.2)` 조회 시 키를 찾지 못하고 **무조건 디폴트값(FIP 5.2, wRC 92)**으로 붕괴됩니다.
   - **결과**: 오프라인 백테스트에서는 경기 후 수집된 라인업/일별 데이터 키 매칭으로 높은 성능 착시(Look-ahead bias)를 보이지만, 실제 실시간 예측 시에는 리그 최고 에이스 투수도 FIP 5.2의 평범한 투수로 평가되는 치명적 오류가 발생합니다.
 
 #### 2. 도메인 지표(Sabermetrics) 산출 방식의 자의적 왜곡
-* **코드 위치**: [create_feature_matrix_v7.py:L63](file:///Users/wiww1030/Desktop/test/create_feature_matrix_v7.py#L63)
+* **코드 위치**: `create_feature_matrix_v7.py:L63`
   ```python
   current_wrc = obp_std.fillna(0.280) * 333
   ```
@@ -34,13 +34,13 @@
   - **FIP 상수 고정 (`+ 3.10`)**: KBO 리그의 연도별 공인구 반발력 변화나 리그 평균 ERA에 따라 매년 변동하는 C_FIP 상수를 `3.10`으로 일률 하드코딩했습니다.
 
 #### 3. 표본 크기를 무시한 극단적인 가중치 블렌딩 (Sample Size Insufficiency)
-* **코드 위치**: [create_feature_matrix_v7.py:L47, L70](file:///Users/wiww1030/Desktop/test/create_feature_matrix_v7.py#L47)
+* **코드 위치**: `create_feature_matrix_v7.py:L47, L70`
 * **문제점**:
   - 투수는 5이닝(`ip / 5.0`), 타자는 10타석(`pa / 10.0`)만 소화하면 지난 시즌 성적 반영 비율이 0%가 되고 현재 시즌 성적 100%로 전환됩니다.
   - 시즌 초반 1경기(5이닝) 부진으로 FIP가 폭등한 에이스 투수나 10타석 무안타 타자의 지표가 지나치게 왜곡되어 시즌 초반 극심한 예측 노이즈를 유발합니다. (최소 50~100이닝/타석 수준의 안정화 표본 필요)
 
 #### 4. 머신러닝의 자율 학습을 방해하는 수동 피처 주입
-* **코드 위치**: [create_feature_matrix_v7.py:L130, L135](file:///Users/wiww1030/Desktop/test/create_feature_matrix_v7.py#L130#L135)
+* **코드 위치**: `create_feature_matrix_v7.py:L130, L135`
 * **문제점**:
   - `W_STARTER, W_BENCH = 1.0, 0.0`으로 설정되어 벤치 타자의 성적은 곱해지면서 0이 됩니다. 이는 `rosters.csv` 수집 및 벤치 평균 연산 로직 전체가 무용지물(Dead Code)임을 의미합니다.
   - 또한 `total_diff = (batting_diff * 0.5) - (sp_fip_diff * 0.3) - (rp_fip_diff * 0.2)`와 같이 검증되지 않은 인간의 자의적 가중치(0.5, 0.3, 0.2)를 결합하여 만든 피처는 머신러닝 모델에 편향(Bias)을 강제 주입하게 됩니다.
@@ -50,19 +50,19 @@
 ### 2.2. 모델 구조 및 앙상블 체계 (Model Architecture & Ensembling)
 
 #### 1. 포아송 회귀(Poisson Regression)의 과산포(Overdispersion) 미적용
-* **코드 위치**: [tune_hyperparameters.py:L77, L102](file:///Users/wiww1030/Desktop/test/tune_hyperparameters.py#L77#L102)
+* **코드 위치**: [tune_hyperparameters.py](../scripts/model/tune_hyperparameters.py)
 * **문제점**:
   - CatBoost 및 LightGBM에서 `loss_function="Poisson"`, `objective="poisson"`을 사용하고 있습니다.
   - 포아송 분포는 **"평균 = 분산"**을 전제로 하지만, 야구 득점 데이터는 빅이닝 및 무득점 경기로 인해 **과산포(분산 >> 평균)** 현상이 뚜렷합니다. Poisson loss는 대량 득점 경기의 아웃라이어 오차에 과도하게 민감하게 반응하여 득점 기댓값을 편향시킵니다. (Negative Binomial 분포 등이 적합)
 
 #### 2. Skellam 분포의 독립성 가정 위배
-* **코드 위치**: [tune_hyperparameters.py:L51-L56](file:///Users/wiww1030/Desktop/test/tune_hyperparameters.py#L51-L56)
+* **코드 위치**: [tune_hyperparameters.py](../scripts/model/tune_hyperparameters.py)
 * **문제점**:
   - 홈팀 득점($\mu_{home}$)과 어웨이팀 득점($\mu_{away}$)이 독립적인 포아송 확률변수라고 가정하고 Skellam 분포를 적용하여 승률을 도출합니다.
   - 그러나 실제 야구 경기는 구장 파크팩터, 날씨, 연장전 규칙, 경기 흐름에 따른 승리조/패전조 불펜 투입 전략으로 인해 양 팀 득점 간 상호 연관성(Correlation)이 존재하므로 독립성 가정이 깨집니다.
 
 #### 3. Heterogeneous 앙상블의 전처리 비일치
-* **코드 위치**: [tune_hyperparameters.py:L132-L156](file:///Users/wiww1030/Desktop/test/tune_hyperparameters.py#L132-L156)
+* **코드 위치**: [tune_hyperparameters.py](../scripts/model/tune_hyperparameters.py)
 * **문제점**:
   - 트리 모델(CatBoost, LightGBM, RF)과 선형/RBF 모델(Ridge, SVR)을 혼용하면서 범주형 변수를 단순 `pd.get_dummies` 및 `StandardScaler`로 처리했습니다.
   - One-hot encoding된 0/1 이진 변수를 StandardScaler로 스케일링하는 과정에서 변수의 통계적 의미가 왜곡되어 SVR 및 Ridge 모델의 성능 반감 요소가 됩니다.
@@ -72,7 +72,7 @@
 ### 2.3. 하이퍼파라미터 튜닝 및 평가 시스템 (Validation & Tuning Leakage)
 
 #### 1. 치명적인 테스트 세트 타깃 누수 (Overfitting to Test Set)
-* **코드 위치**: [tune_hyperparameters.py:L114-L126](file:///Users/wiww1030/Desktop/test/tune_hyperparameters.py#L114-L126)
+* **코드 위치**: [tune_hyperparameters.py](../scripts/model/tune_hyperparameters.py)
   ```python
   df_2026 = DF_GLOBAL[DF_GLOBAL['year'] == 2026].copy()
   # 2026년 데이터로 Optuna objective 평가 진행

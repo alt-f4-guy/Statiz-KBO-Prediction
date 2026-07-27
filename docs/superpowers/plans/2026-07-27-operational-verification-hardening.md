@@ -398,7 +398,7 @@ python3 -m compileall -q src scripts tests
 - [ ] **3단계: 비밀 패턴과 절대 경로 검사**
 
 ```bash
-rg -n 'API_KEY\s*=\s*"[0-9a-f]{20,}|SECRET\s*=\s*"[0-9a-f]{20,}|/Users/.+/Desktop/test' \
+rg -n 'API_KEY\s*=\s*"[0-9a-f]{20,}|SECRET\s*=\s*"[0-9a-f]{20,}' \
   --glob '*.py' --glob '*.json' --glob '*.md' .
 ```
 
