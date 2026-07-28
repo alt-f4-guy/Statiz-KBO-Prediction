@@ -77,6 +77,27 @@ class PredictionProgressTests(unittest.TestCase):
         self.assertEqual(summary.waiting, 1)
         self.assertEqual(summary.failed, 1)
 
+    def test_summary_counts_offline_prediction_as_completed(self):
+        # 의도적으로 제출하지 않은 경기 후 예측은 실패가 아니라 완료다.
+        from prediction_progress import (
+            advance_game_progress,
+            create_game_progress,
+            summarize_progress,
+        )
+
+        offline = advance_game_progress(
+            create_game_progress(1, "원정 @ 홈", "18:30"),
+            step=6,
+            status="미제출 예측 완료 · 홈 승률 61.0%",
+            delivery="미제출",
+        )
+
+        summary = summarize_progress({1: offline})
+
+        self.assertEqual(summary.completed, 1)
+        self.assertEqual(summary.waiting, 0)
+        self.assertEqual(summary.failed, 0)
+
     def test_rendered_view_contains_preparation_summary_and_game_rows(self):
         # 실제 Rich 출력에 준비 상태, 전체 집계와 경기별 상태가 나타난다.
         from rich.console import Console

@@ -110,6 +110,28 @@ class PredictionLogEvaluationTests(unittest.TestCase):
 
         self.assertEqual(result["s_no"].tolist(), [1])
 
+    def test_offline_prediction_is_excluded_from_prospective_evaluation(self):
+        # 필드가 충분해도 회고 진단 레코드는 전향 평가에 들어가지 않는다.
+        from evaluate_prediction_log import prepare_evaluation_rows
+
+        log = _prediction_log()
+        offline = log.iloc[[0]].copy()
+        offline["record_type"] = "offline_prediction"
+        offline["s_no"] = 4
+        offline["recorded_at"] = "2026-07-29T19:00:00+09:00"
+        offline["game_datetime"] = "2026-07-29T18:30:00+09:00"
+        offline["evaluation_role"] = "retrospective_diagnostic"
+        offline["api_status"] = "not_submitted"
+        log = pd.concat([log, offline], ignore_index=True)
+
+        result = prepare_evaluation_rows(
+            log,
+            _games(),
+            deployment_id="deploy-a",
+        )
+
+        self.assertNotIn(4, result["s_no"].tolist())
+
     def test_overall_rates_use_all_predictions(self):
         # 모델 유형별 분리 때문에 전체 대체 모델·API 성공률이 0 또는 1로 고정되면 안 된다.
         from evaluate_prediction_log import (

@@ -86,7 +86,9 @@ def summarize_progress(
     """경기 상태를 완료·대기·실패로 집계한다."""
 
     rows = list(games.values())
-    completed = sum(row.delivery in {"성공", "만료"} for row in rows)
+    completed = sum(
+        row.delivery in {"성공", "만료", "미제출"} for row in rows
+    )
     failed = sum(row.delivery == "실패" for row in rows)
     return ProgressSummary(
         total=len(rows),
