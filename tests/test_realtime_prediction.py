@@ -241,6 +241,40 @@ class RealtimePredictionTests(unittest.TestCase):
         self.assertTrue(_today_games_complete(games, {1, 2}))
         self.assertFalse(_today_games_complete(games, {1}))
 
+    def test_completed_game_progress_restores_offline_result(self):
+        # 재시작하면 오프라인 예측 로그의 모델·확률·미제출 상태를 복원한다.
+        from predict_2026 import _completed_game_progress
+
+        history = pd.DataFrame(
+            [
+                {
+                    "record_type": "offline_prediction",
+                    "api_status": "not_submitted",
+                    "s_no": 1,
+                    "model_type": "primary",
+                    "home_win_probability": 0.61,
+                }
+            ]
+        )
+        game = {
+            "s_no": 1,
+            "homeTeam": 5002,
+            "awayTeam": 10001,
+            "homeTeamName": "LG",
+            "awayTeamName": "키움",
+        }
+
+        progress = _completed_game_progress(
+            game,
+            pd.Timestamp("2026-07-28T18:30:00+09:00"),
+            history,
+        )
+
+        self.assertEqual(progress.step, 6)
+        self.assertEqual(progress.status, "미제출 예측 완료 · 홈 승률 61.0%")
+        self.assertEqual(progress.model, "primary")
+        self.assertEqual(progress.delivery, "미제출")
+
     def test_offline_record_preserves_prediction_and_marks_non_submission(self):
         # 재사용한 확률·모델은 유지하고 경기 후 기록은 회고 진단으로 격리한다.
         from realtime_prediction import build_offline_prediction_record

@@ -28,6 +28,7 @@ from pipeline_config import (
 from prediction_progress import (
     GameProgress,
     PredictionProgressDisplay,
+    advance_game_progress,
     create_game_progress,
 )
 from realtime_prediction import (
@@ -225,6 +226,37 @@ def _today_games_complete(
     """오늘 일정의 모든 경기가 최종 처리됐는지 확인한다."""
 
     return all(int(game["s_no"]) in terminal_s_nos for game in today_games)
+
+
+def _completed_game_progress(
+    game: dict[str, Any],
+    game_time: pd.Timestamp,
+    history: pd.DataFrame,
+) -> GameProgress:
+    """완료 로그에서 재시작 화면에 표시할 경기 상태를 복원한다."""
+
+    s_no = int(game["s_no"])
+    rows = history.loc[
+        pd.to_numeric(history["s_no"], errors="coerce").eq(s_no)
+        & (
+            history["record_type"].eq("offline_prediction")
+            | (
+                history["record_type"].eq("delivery")
+                & history["api_status"].eq("success")
+            )
+        )
+    ]
+    record = rows.iloc[-1]
+    offline = record["record_type"] == "offline_prediction"
+    delivery = "미제출" if offline else "성공"
+    probability = float(record["home_win_probability"])
+    return advance_game_progress(
+        _game_progress(game, game_time),
+        step=6,
+        status=f"{delivery} 예측 완료 · 홈 승률 {probability:.1%}",
+        model=str(record["model_type"]),
+        delivery=delivery,
+    )
 
 
 def _lineup_wait_required(
@@ -462,6 +494,31 @@ def _run_realtime_prediction_system(
             for game in today_games
             if int(game["s_no"]) not in terminal_s_nos
         ]
+        completed = [
+            game
+            for game in today_games
+            if int(game["s_no"]) in terminal_s_nos
+        ]
+        for game in completed:
+            s_no = int(game["s_no"])
+            target_reference = _prepare_games(
+                pd.concat(
+                    [games, pd.DataFrame([game])],
+                    ignore_index=True,
+                    sort=False,
+                ).drop_duplicates("s_no", keep="last"),
+                include_unscored=True,
+            )
+            target_time = target_reference.loc[
+                target_reference["s_no"].eq(s_no)
+            ].iloc[0]
+            display.register(
+                _completed_game_progress(
+                    game,
+                    pd.Timestamp(target_time["game_datetime"]),
+                    log_history,
+                )
+            )
         if not pending:
             display.set_waiting("오늘 경기 예측 처리 완료")
             return
