@@ -22,9 +22,9 @@ DAILY_PHASES: tuple[tuple[str, str], ...] = (
     ("scripts.collect.collect_schedule", "경기 일정 수집"),
     ("scripts.collect.collect_lineups", "라인업 데이터 업데이트"),
     ("scripts.collect.collect_rosters", "로스터 정보 동기화"),
-    ("scripts.ops.predict_2026", "실시간 예측 시스템 가동"),
     ("scripts.collect.collect_player_stats", "선수별 원천 스냅샷 수집"),
     ("scripts.build.process_raw_data", "원천 스냅샷 v2 정형화"),
+    ("scripts.ops.predict_2026", "실시간 예측 시스템 가동"),
 )
 
 console = Console()
