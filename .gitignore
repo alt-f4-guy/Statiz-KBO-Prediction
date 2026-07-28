@@ -26,6 +26,7 @@ __pycache__/
 # 로컬 가상환경과 테스트·도구 캐시
 .venv/
 venv/
+.worktrees/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
