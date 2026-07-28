@@ -67,6 +67,83 @@ class RealtimePredictionTests(unittest.TestCase):
 
         self.assertEqual(result, [])
 
+    def test_schedule_failure_uses_started_local_games_without_waiting(self):
+        # 일정 요청 실패는 외부 sleep 없이 이미 시작한 로컬 경기로 전환한다.
+        from predict_2026 import _load_today_games
+        from statiz_api import StatizAPIError
+
+        class FailedAPI:
+            def get(self, endpoint, params):
+                raise StatizAPIError("HTTP 429")
+
+        games = pd.DataFrame(
+            {
+                "s_no": [1],
+                "gameDate": [1785231000],
+                "homeTeam": [5002],
+                "awayTeam": [10001],
+            }
+        )
+
+        result, used_local = _load_today_games(
+            FailedAPI(),
+            games,
+            now_utc=pd.Timestamp("2026-07-28T19:00:00+09:00"),
+        )
+
+        self.assertTrue(used_local)
+        self.assertEqual([game["s_no"] for game in result], [1])
+
+    def test_schedule_failure_without_started_local_games_reraises(self):
+        # 경기 전에는 로컬 일정으로 제출하지 않고 일정 오류를 상위에 전달한다.
+        from predict_2026 import _load_today_games
+        from statiz_api import StatizAPIError
+
+        class FailedAPI:
+            def get(self, endpoint, params):
+                raise StatizAPIError("HTTP 429")
+
+        future = pd.DataFrame(
+            {
+                "s_no": [1],
+                "gameDate": [1785231000],
+                "homeTeam": [5002],
+                "awayTeam": [10001],
+            }
+        )
+
+        with self.assertRaisesRegex(StatizAPIError, "429"):
+            _load_today_games(
+                FailedAPI(),
+                future,
+                now_utc=pd.Timestamp("2026-07-28T18:00:00+09:00"),
+            )
+
+    def test_successful_schedule_keeps_api_games(self):
+        # 정상 응답이 있으면 로컬 데이터가 아니라 API의 오늘 일정을 사용한다.
+        from predict_2026 import _load_today_games
+
+        class SuccessfulAPI:
+            def get(self, endpoint, params):
+                return {
+                    "20260728": [
+                        {
+                            "s_no": 10,
+                            "homeTeam": 5002,
+                            "awayTeam": 10001,
+                        }
+                    ]
+                }
+
+        result, used_local = _load_today_games(
+            SuccessfulAPI(),
+            pd.DataFrame(),
+            now_utc=pd.Timestamp("2026-07-28T17:00:00+09:00"),
+        )
+
+        self.assertFalse(used_local)
+        self.assertEqual([game["s_no"] for game in result], [10])
+
     def test_terminal_games_include_success_and_offline_only(self):
         # 만료 이력은 재처리하고 성공 제출·오프라인 예측만 완료로 복원한다.
         from predict_2026 import _terminal_game_ids

@@ -114,6 +114,35 @@ def _local_started_games(
     return games.loc[mask].to_dict(orient="records")
 
 
+def _load_today_games(
+    api: StatizAPI,
+    games: pd.DataFrame,
+    *,
+    now_utc: pd.Timestamp,
+) -> tuple[list[dict[str, Any]], bool]:
+    """오늘 API 일정을 읽고 실패하면 시작한 로컬 경기로 대체한다."""
+
+    current = pd.Timestamp(now_utc)
+    local_now = current.tz_convert(SEOUL)
+    try:
+        schedule = api.get(
+            "prediction/gameSchedule",
+            {
+                "year": local_now.strftime("%Y"),
+                "month": local_now.strftime("%m"),
+            },
+        )
+    except StatizAPIError:
+        local_games = _local_started_games(games, current)
+        if local_games:
+            return local_games, True
+        raise
+
+    if not isinstance(schedule, dict):
+        return [], False
+    return list(schedule.get(local_now.strftime("%Y%m%d"), [])), False
+
+
 def _extract_players(payload: Any) -> list[dict[str, Any]]:
     if isinstance(payload, list):
         direct = [item for item in payload if isinstance(item, dict) and "p_no" in item]
