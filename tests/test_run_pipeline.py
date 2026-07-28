@@ -17,10 +17,19 @@ class RunPipelineTests(unittest.TestCase):
                 "scripts.collect.collect_schedule",
                 "scripts.collect.collect_lineups",
                 "scripts.collect.collect_rosters",
+                "scripts.ops.predict_2026",
                 "scripts.collect.collect_player_stats",
                 "scripts.build.process_raw_data",
-                "scripts.ops.predict_2026",
             ],
+        )
+
+    def test_prediction_runs_before_high_volume_player_collection(self):
+        # 대량 선수 API 호출로 요청 한도를 소진하기 전에 예측을 제출한다.
+        modules = [module for module, _ in run_pipeline.DAILY_PHASES]
+
+        self.assertLess(
+            modules.index("scripts.ops.predict_2026"),
+            modules.index("scripts.collect.collect_player_stats"),
         )
 
     def test_environment_file_loads_missing_values_without_overriding_shell(self):
