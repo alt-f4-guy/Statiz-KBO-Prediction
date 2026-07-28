@@ -3,9 +3,18 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Callable
 from zoneinfo import ZoneInfo
 
 from rich.console import Console
+from rich.progress import (
+    BarColumn,
+    MofNCompleteColumn,
+    Progress,
+    TaskID,
+    TextColumn,
+    TimeElapsedColumn,
+)
 
 from pipeline_config import RAW_DATA_DIR, load_api_credentials
 from player_stats_collection import (
@@ -17,6 +26,30 @@ from statiz_api import StatizAPI
 
 console = Console()
 SEOUL = ZoneInfo("Asia/Seoul")
+
+
+def build_progress_callback(
+    progress: Progress,
+    task_id: TaskID,
+) -> Callable[[int, int, int, int], None]:
+    """선수 수집 결과를 Rich 진행률 작업에 반영한다."""
+
+    def update_progress(
+        completed_players: int,
+        player_number: int,
+        success_count: int,
+        failure_count: int,
+    ) -> None:
+        progress.update(
+            task_id,
+            completed=completed_players,
+            description=(
+                f"선수 {player_number} · 성공 {success_count} · "
+                f"실패 {failure_count}"
+            ),
+        )
+
+    return update_progress
 
 
 def main() -> None:
@@ -38,15 +71,38 @@ def main() -> None:
     season_path = player_dir / "player_season_snapshots.csv"
 
     console.print(f"수집 대상 선수: {len(player_numbers)}명")
-    failures = collect_player_snapshots(
-        api,
-        player_numbers,
-        years,
-        current_year,
-        day_path,
-        season_path,
-        target_date=today,
-    )
+    if player_numbers:
+        with Progress(
+            TextColumn("{task.description}"),
+            BarColumn(),
+            MofNCompleteColumn(),
+            TimeElapsedColumn(),
+            console=console,
+        ) as progress:
+            task_id = progress.add_task(
+                "선수 스냅샷 수집",
+                total=len(player_numbers),
+            )
+            failures = collect_player_snapshots(
+                api,
+                player_numbers,
+                years,
+                current_year,
+                day_path,
+                season_path,
+                target_date=today,
+                progress_callback=build_progress_callback(progress, task_id),
+            )
+    else:
+        failures = collect_player_snapshots(
+            api,
+            player_numbers,
+            years,
+            current_year,
+            day_path,
+            season_path,
+            target_date=today,
+        )
     if failures:
         raise RuntimeError(f"선수 스냅샷 수집 실패: {len(failures)}건")
     console.print("[green]선수 스냅샷 수집 완료[/green]")

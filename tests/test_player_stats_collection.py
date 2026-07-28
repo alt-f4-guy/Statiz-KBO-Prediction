@@ -234,6 +234,23 @@ class PlayerStatsCollectionTests(unittest.TestCase):
             [(1, 10, 2, 0), (2, 20, 4, 0)],
         )
 
+    def test_progress_callback_updates_single_rich_task(self):
+        from rich.progress import Progress
+
+        from scripts.collect.collect_player_stats import build_progress_callback
+
+        progress = Progress()
+        task_id = progress.add_task("선수 스냅샷 수집", total=2)
+        callback = build_progress_callback(progress, task_id)
+
+        callback(1, 10, 2, 0)
+
+        task = progress.tasks[task_id]
+        self.assertEqual(task.completed, 1)
+        self.assertIn("선수 10", task.description)
+        self.assertIn("성공 2", task.description)
+        self.assertIn("실패 0", task.description)
+
     def test_final_api_failure_stops_before_next_player(self):
         from player_stats_collection import collect_player_snapshots
         from statiz_api import StatizAPIError
