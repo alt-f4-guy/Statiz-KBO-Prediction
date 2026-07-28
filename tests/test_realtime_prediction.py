@@ -144,6 +144,32 @@ class RealtimePredictionTests(unittest.TestCase):
         self.assertFalse(used_local)
         self.assertEqual([game["s_no"] for game in result], [10])
 
+    def test_empty_schedule_uses_started_local_games(self):
+        # 빈 정상 응답도 오늘 경기가 시작했다면 로컬 오프라인 예측으로 전환한다.
+        from predict_2026 import _load_today_games
+
+        class EmptyAPI:
+            def get(self, endpoint, params):
+                return {}
+
+        games = pd.DataFrame(
+            {
+                "s_no": [1],
+                "gameDate": [1785231000],
+                "homeTeam": [5002],
+                "awayTeam": [10001],
+            }
+        )
+
+        result, used_local = _load_today_games(
+            EmptyAPI(),
+            games,
+            now_utc=pd.Timestamp("2026-07-28T19:00:00+09:00"),
+        )
+
+        self.assertTrue(used_local)
+        self.assertEqual([game["s_no"] for game in result], [1])
+
     def test_realtime_system_disables_internal_read_retries(self):
         # 429가 300초 내부 sleep으로 들어가지 않도록 예측 인스턴스만 끈다.
         from types import SimpleNamespace

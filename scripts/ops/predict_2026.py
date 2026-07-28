@@ -120,7 +120,7 @@ def _load_today_games(
     *,
     now_utc: pd.Timestamp,
 ) -> tuple[list[dict[str, Any]], bool]:
-    """오늘 API 일정을 읽고 실패하면 시작한 로컬 경기로 대체한다."""
+    """오늘 API 일정이 없거나 실패하면 시작한 로컬 경기로 대체한다."""
 
     current = pd.Timestamp(now_utc)
     local_now = current.tz_convert(SEOUL)
@@ -138,9 +138,18 @@ def _load_today_games(
             return local_games, True
         raise
 
-    if not isinstance(schedule, dict):
-        return [], False
-    return list(schedule.get(local_now.strftime("%Y%m%d"), [])), False
+    api_games = (
+        list(schedule.get(local_now.strftime("%Y%m%d"), []))
+        if isinstance(schedule, dict)
+        else []
+    )
+    if api_games:
+        return api_games, False
+
+    local_games = _local_started_games(games, current)
+    if local_games:
+        return local_games, True
+    return [], False
 
 
 def _extract_players(payload: Any) -> list[dict[str, Any]]:
