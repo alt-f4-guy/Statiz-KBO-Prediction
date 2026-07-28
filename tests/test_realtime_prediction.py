@@ -144,6 +144,44 @@ class RealtimePredictionTests(unittest.TestCase):
         self.assertFalse(used_local)
         self.assertEqual([game["s_no"] for game in result], [10])
 
+    def test_realtime_system_disables_internal_read_retries(self):
+        # 429가 300초 내부 sleep으로 들어가지 않도록 예측 인스턴스만 끈다.
+        from types import SimpleNamespace
+        from unittest.mock import patch
+
+        from prediction_progress import PredictionProgressDisplay
+        from predict_2026 import _run_realtime_prediction_system
+
+        captured = {}
+
+        def stop_after_constructor(*args, **kwargs):
+            captured.update(kwargs)
+            raise RuntimeError("constructor observed")
+
+        with (
+            patch(
+                "predict_2026.load_api_credentials",
+                return_value=SimpleNamespace(
+                    api_key="key",
+                    secret="secret",
+                    ptt_idx="05",
+                ),
+            ),
+            patch(
+                "predict_2026.StatizAPI",
+                side_effect=stop_after_constructor,
+            ),
+        ):
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "constructor observed",
+            ):
+                _run_realtime_prediction_system(
+                    PredictionProgressDisplay()
+                )
+
+        self.assertEqual(captured["max_retries"], 0)
+
     def test_terminal_games_include_success_and_offline_only(self):
         # 만료 이력은 재처리하고 성공 제출·오프라인 예측만 완료로 복원한다.
         from predict_2026 import _terminal_game_ids

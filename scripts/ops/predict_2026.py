@@ -352,7 +352,11 @@ def _run_realtime_prediction_system(
 ) -> None:
     with display.preparation("인증정보 확인"):
         credentials = load_api_credentials(require_ptt_idx=True)
-    api = StatizAPI(credentials.api_key, credentials.secret)
+    api = StatizAPI(
+        credentials.api_key,
+        credentials.secret,
+        max_retries=0,
+    )
 
     with display.preparation("모델과 메타데이터 로드"):
         model = joblib.load(MODEL_DIR / "best_model.joblib")
@@ -400,18 +404,15 @@ def _run_realtime_prediction_system(
             git_commit,
         )
 
-    today = datetime.now(SEOUL)
-    day_key = today.strftime("%Y%m%d")
-    year = today.strftime("%Y")
-    month = today.strftime("%m")
     log_history = _load_prediction_history()
     terminal_s_nos = _terminal_game_ids(log_history)
 
     while True:
         try:
-            schedule = api.get(
-                "prediction/gameSchedule",
-                {"year": year, "month": month},
+            today_games, used_local_schedule = _load_today_games(
+                api,
+                games,
+                now_utc=pd.Timestamp.now(tz="UTC"),
             )
         except StatizAPIError as exc:
             next_poll = (
@@ -423,7 +424,7 @@ def _run_realtime_prediction_system(
             )
             time.sleep(POLL_SECONDS)
             continue
-        if not isinstance(schedule, dict) or day_key not in schedule:
+        if not today_games:
             next_poll = (
                 datetime.now(SEOUL) + timedelta(seconds=POLL_SECONDS)
             ).strftime("%H:%M:%S")
@@ -433,15 +434,18 @@ def _run_realtime_prediction_system(
             time.sleep(POLL_SECONDS)
             continue
 
-        display.set_waiting("")
-        today_games = schedule[day_key]
+        display.set_waiting(
+            "일정 API 제한 · 로컬 일정으로 오프라인 예측"
+            if used_local_schedule
+            else ""
+        )
         pending = [
             game
             for game in today_games
             if int(game["s_no"]) not in terminal_s_nos
         ]
         if not pending:
-            display.set_waiting("오늘 경기 예측 전송 완료")
+            display.set_waiting("오늘 경기 예측 처리 완료")
             return
 
         for game in pending:
