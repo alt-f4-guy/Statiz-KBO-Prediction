@@ -86,6 +86,34 @@ def _game_progress(
     )
 
 
+def _local_started_games(
+    games: pd.DataFrame,
+    now_utc: pd.Timestamp,
+) -> list[dict[str, Any]]:
+    """로컬 원천 데이터에서 이미 시작한 오늘 경기만 반환한다."""
+
+    current = pd.Timestamp(now_utc)
+    if current.tzinfo is None:
+        raise ValueError("로컬 일정 선택에는 시간대 정보가 필요합니다.")
+
+    numeric = pd.to_numeric(games["gameDate"], errors="coerce")
+    seconds = numeric.where(numeric.abs().le(1e11), numeric / 1000)
+    starts = pd.to_datetime(
+        seconds,
+        unit="s",
+        errors="coerce",
+        utc=True,
+    )
+    current_utc = current.tz_convert("UTC")
+    local_dates = starts.dt.tz_convert(SEOUL).dt.date
+    mask = (
+        starts.notna()
+        & local_dates.eq(current.tz_convert(SEOUL).date())
+        & starts.le(current_utc)
+    )
+    return games.loc[mask].to_dict(orient="records")
+
+
 def _extract_players(payload: Any) -> list[dict[str, Any]]:
     if isinstance(payload, list):
         direct = [item for item in payload if isinstance(item, dict) and "p_no" in item]

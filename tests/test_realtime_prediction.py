@@ -23,6 +23,50 @@ class RealtimePredictionTests(unittest.TestCase):
         self.assertEqual(progress.matchup, "키움 @ LG")
         self.assertEqual(progress.start_time, "18:30")
 
+    def test_local_started_games_selects_only_started_games_today(self):
+        # 로컬 대체는 오늘 시작한 경기만 반환하고 미래·과거 경기는 제외한다.
+        from predict_2026 import _local_started_games
+
+        games = pd.DataFrame(
+            {
+                "s_no": [1, 2, 3],
+                "gameDate": [
+                    1785231000,  # 2026-07-28 18:30 KST
+                    1785317400,  # 2026-07-29 18:30 KST
+                    1785144600,  # 2026-07-27 18:30 KST
+                ],
+                "homeTeam": [5002, 5002, 5002],
+                "awayTeam": [10001, 10001, 10001],
+            }
+        )
+
+        result = _local_started_games(
+            games,
+            pd.Timestamp("2026-07-28T19:00:00+09:00"),
+        )
+
+        self.assertEqual([game["s_no"] for game in result], [1])
+
+    def test_local_started_games_excludes_future_and_invalid_start_times(self):
+        # 오늘 행이라도 시작 전이거나 시각 파싱이 불가능하면 사용하지 않는다.
+        from predict_2026 import _local_started_games
+
+        games = pd.DataFrame(
+            {
+                "s_no": [1, 2],
+                "gameDate": [1785231000, "invalid"],
+                "homeTeam": [5002, 5002],
+                "awayTeam": [10001, 10001],
+            }
+        )
+
+        result = _local_started_games(
+            games,
+            pd.Timestamp("2026-07-28T18:00:00+09:00"),
+        )
+
+        self.assertEqual(result, [])
+
     def test_terminal_games_include_success_and_offline_only(self):
         # 만료 이력은 재처리하고 성공 제출·오프라인 예측만 완료로 복원한다.
         from predict_2026 import _terminal_game_ids
