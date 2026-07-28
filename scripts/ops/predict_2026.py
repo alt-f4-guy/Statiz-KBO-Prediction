@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import subprocess
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -24,6 +24,11 @@ from pipeline_config import (
     PROCESSED_DATA_DIR,
     RAW_DATA_DIR,
     load_api_credentials,
+)
+from prediction_progress import (
+    GameProgress,
+    PredictionProgressDisplay,
+    create_game_progress,
 )
 from realtime_prediction import (
     append_prediction_log,
@@ -62,6 +67,22 @@ def _team_name(code: Any, supplied: Any = None) -> str:
         return supplied
     numeric = int(float(code))
     return TEAM_NAME_MAP.get(numeric, str(numeric))
+
+
+def _game_progress(
+    game: dict[str, Any],
+    game_time: pd.Timestamp,
+) -> GameProgress:
+    """경기의 대진과 서울 시작 시각으로 초기 표시 상태를 만든다."""
+
+    home_name = _team_name(game["homeTeam"], game.get("homeTeamName"))
+    away_name = _team_name(game["awayTeam"], game.get("awayTeamName"))
+    start_time = game_time.tz_convert(SEOUL).strftime("%H:%M")
+    return create_game_progress(
+        int(game["s_no"]),
+        f"{away_name} @ {home_name}",
+        start_time,
+    )
 
 
 def _extract_players(payload: Any) -> list[dict[str, Any]]:
@@ -186,40 +207,58 @@ def _primary_quality_ok(row: pd.Series, features: list[str]) -> bool:
     )
 
 
-def run_realtime_prediction_system() -> None:
-    credentials = load_api_credentials(require_ptt_idx=True)
+def _run_realtime_prediction_system(
+    display: PredictionProgressDisplay,
+) -> None:
+    with display.preparation("인증정보 확인"):
+        credentials = load_api_credentials(require_ptt_idx=True)
     api = StatizAPI(credentials.api_key, credentials.secret)
-    model = joblib.load(MODEL_DIR / "best_model.joblib")
-    metadata = json.loads(
-        (MODEL_DIR / "best_model_metadata.json").read_text(encoding="utf-8")
-    )
-    git_commit = subprocess.run(
-        ["git", "rev-parse", "HEAD"],
-        cwd=PROJECT_ROOT,
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout.strip()
-    deployment_context = build_deployment_context(
-        PROJECT_ROOT,
-        metadata,
-        git_commit,
-    )
-    features = list(model.feature_columns)
 
-    games = pd.read_csv(RAW_DATA_DIR / "games_master.csv")
-    historical_lineups = pd.read_csv(RAW_DATA_DIR / "lineups.csv")
-    rosters = pd.read_csv(RAW_DATA_DIR / "rosters.csv")
-    day = pd.read_csv(PROCESSED_DATA_DIR / "player_day_processed_v2.csv")
-    season = pd.read_csv(PROCESSED_DATA_DIR / "player_season_processed_v2.csv")
-    training = pd.read_csv(FINAL_DATA_DIR / "final_training_set_v9.csv")
-    non_draw_training = training.loc[
-        training["homeScore"].ne(training["awayScore"])
-        & training["year"].lt(2026)
-    ]
-    league_home_rate = float(
-        non_draw_training["homeScore"].gt(non_draw_training["awayScore"]).mean()
-    )
+    with display.preparation("모델과 메타데이터 로드"):
+        model = joblib.load(MODEL_DIR / "best_model.joblib")
+        metadata = json.loads(
+            (MODEL_DIR / "best_model_metadata.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        features = list(model.feature_columns)
+
+    with display.preparation("운영 데이터 로드"):
+        games = pd.read_csv(RAW_DATA_DIR / "games_master.csv")
+        historical_lineups = pd.read_csv(RAW_DATA_DIR / "lineups.csv")
+        rosters = pd.read_csv(RAW_DATA_DIR / "rosters.csv")
+        day = pd.read_csv(
+            PROCESSED_DATA_DIR / "player_day_processed_v2.csv"
+        )
+        season = pd.read_csv(
+            PROCESSED_DATA_DIR / "player_season_processed_v2.csv"
+        )
+        training = pd.read_csv(
+            FINAL_DATA_DIR / "final_training_set_v9.csv"
+        )
+        non_draw_training = training.loc[
+            training["homeScore"].ne(training["awayScore"])
+            & training["year"].lt(2026)
+        ]
+        league_home_rate = float(
+            non_draw_training["homeScore"]
+            .gt(non_draw_training["awayScore"])
+            .mean()
+        )
+
+    with display.preparation("배포 정보 확인"):
+        git_commit = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=PROJECT_ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        deployment_context = build_deployment_context(
+            PROJECT_ROOT,
+            metadata,
+            git_commit,
+        )
 
     today = datetime.now(SEOUL)
     day_key = today.strftime("%Y%m%d")
@@ -235,13 +274,26 @@ def run_realtime_prediction_system() -> None:
                 {"year": year, "month": month},
             )
         except StatizAPIError as exc:
-            print(f"일정 조회 실패: {exc}")
+            next_poll = (
+                datetime.now(SEOUL) + timedelta(seconds=POLL_SECONDS)
+            ).strftime("%H:%M:%S")
+            display.set_waiting(
+                f"일정 조회 실패 · {exc.__class__.__name__} · "
+                f"다음 조회 {next_poll}"
+            )
             time.sleep(POLL_SECONDS)
             continue
         if not isinstance(schedule, dict) or day_key not in schedule:
+            next_poll = (
+                datetime.now(SEOUL) + timedelta(seconds=POLL_SECONDS)
+            ).strftime("%H:%M:%S")
+            display.set_waiting(
+                f"오늘 일정 대기 · 다음 조회 {next_poll}"
+            )
             time.sleep(POLL_SECONDS)
             continue
 
+        display.set_waiting("")
         today_games = schedule[day_key]
         pending = [
             game
@@ -249,7 +301,7 @@ def run_realtime_prediction_system() -> None:
             if int(game["s_no"]) not in terminal_s_nos
         ]
         if not pending:
-            print("오늘 경기 예측 전송 완료")
+            display.set_waiting("오늘 경기 예측 전송 완료")
             return
 
         for game in pending:
@@ -271,6 +323,7 @@ def run_realtime_prediction_system() -> None:
             ].iloc[0]
             game_time = pd.Timestamp(target_time["game_datetime"])
             cutoff = pd.Timestamp(target_time["feature_cutoff_datetime"])
+            display.register(_game_progress(game, game_time))
             now_utc = pd.Timestamp.now(tz="UTC")
             if not prediction_window_is_open(now_utc, game_time):
                 expired_record = {
@@ -288,6 +341,12 @@ def run_realtime_prediction_system() -> None:
                     ignore_index=True,
                 )
                 terminal_s_nos.add(s_no)
+                display.advance(
+                    s_no,
+                    step=6,
+                    status="경기 시작",
+                    delivery="만료",
+                )
                 continue
 
             existing = _existing_prediction(log_history, s_no)
@@ -300,6 +359,11 @@ def run_realtime_prediction_system() -> None:
                 game_datetime = str(existing["game_datetime"])
                 feature_cutoff = str(existing["feature_cutoff_datetime"])
             else:
+                display.advance(
+                    s_no,
+                    step=2,
+                    status="라인업 조회",
+                )
                 try:
                     lineup_payload = api.get(
                         "prediction/gameLineup", {"s_no": s_no}
@@ -321,12 +385,26 @@ def run_realtime_prediction_system() -> None:
                     )
                 )
                 if not complete and pd.Timestamp.now(tz="UTC") < deadline:
+                    next_poll = (
+                        datetime.now(SEOUL)
+                        + timedelta(seconds=POLL_SECONDS)
+                    ).strftime("%H:%M:%S")
+                    display.advance(
+                        s_no,
+                        step=2,
+                        status=f"라인업 대기 · 다음 조회 {next_poll}",
+                    )
                     continue
 
                 row = None
                 history = target_reference
                 feature_error = ""
                 if complete:
+                    display.advance(
+                        s_no,
+                        step=3,
+                        status="피처 생성",
+                    )
                     try:
                         row, history = _prediction_context(
                             game,
@@ -408,6 +486,12 @@ def run_realtime_prediction_system() -> None:
                     ignore_index=True,
                 )
 
+            display.advance(
+                s_no,
+                step=4,
+                status=fallback_reason or "모델 추론 완료",
+                model=model_type,
+            )
             payload = build_prediction_payload(
                 ptt_idx=credentials.ptt_idx or "",
                 s_no=s_no,
@@ -415,6 +499,11 @@ def run_realtime_prediction_system() -> None:
                 away_team_name=away_name,
                 home_win_probability=probability,
                 update_time=datetime.now(SEOUL).strftime("%Y-%m-%d %H:%M:%S"),
+            )
+            display.advance(
+                s_no,
+                step=5,
+                status="API 제출",
             )
             try:
                 send_prediction_with_retry(api, payload)
@@ -430,7 +519,13 @@ def run_realtime_prediction_system() -> None:
                     [log_history, pd.DataFrame([delivery_record])],
                     ignore_index=True,
                 )
-                print(f"s_no={s_no} 예측 전송 실패: {exc}")
+                display.advance(
+                    s_no,
+                    step=6,
+                    status="제출 실패",
+                    delivery="실패",
+                    error_type=exc.__class__.__name__,
+                )
                 continue
 
             delivery_record = build_delivery_record(
@@ -444,11 +539,21 @@ def run_realtime_prediction_system() -> None:
                 ignore_index=True,
             )
             terminal_s_nos.add(s_no)
-            print(
-                f"{away_name} @ {home_name}: 홈 승률 {probability:.1%} "
-                f"({model_type})"
+            display.advance(
+                s_no,
+                step=6,
+                status=f"제출 완료 · 홈 승률 {probability:.1%}",
+                model=model_type,
+                delivery="성공",
             )
         time.sleep(POLL_SECONDS)
+
+
+def run_realtime_prediction_system() -> None:
+    """준비 단계와 경기별 진행 상태를 표시하며 실시간 예측을 실행한다."""
+
+    with PredictionProgressDisplay() as display:
+        _run_realtime_prediction_system(display)
 
 
 if __name__ == "__main__":

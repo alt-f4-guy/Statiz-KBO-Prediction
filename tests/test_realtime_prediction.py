@@ -4,6 +4,25 @@ import pandas as pd
 
 
 class RealtimePredictionTests(unittest.TestCase):
+    def test_game_progress_uses_matchup_and_seoul_start_time(self):
+        # 경기 행은 원정 @ 홈과 서울 현지 시작 시각을 표시한다.
+        from predict_2026 import _game_progress
+
+        game = {
+            "s_no": 20260496,
+            "homeTeam": 5002,
+            "awayTeam": 10001,
+            "homeTeamName": "LG",
+            "awayTeamName": "키움",
+        }
+        start = pd.Timestamp("2026-07-28T18:30:00+09:00")
+
+        progress = _game_progress(game, start)
+
+        self.assertEqual(progress.s_no, 20260496)
+        self.assertEqual(progress.matchup, "키움 @ LG")
+        self.assertEqual(progress.start_time, "18:30")
+
     def test_terminal_games_include_success_and_expired_only(self):
         # 재시작 후 성공 경기와 이미 시작한 경기만 종료 상태로 복원한다.
         from predict_2026 import _terminal_game_ids
