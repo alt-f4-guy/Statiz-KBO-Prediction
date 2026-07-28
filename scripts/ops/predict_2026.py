@@ -33,6 +33,7 @@ from prediction_progress import (
 from realtime_prediction import (
     append_prediction_log,
     build_delivery_record,
+    build_offline_prediction_record,
     build_prediction_payload,
     feature_prior_usage_rate,
     prediction_window_is_open,
@@ -149,6 +150,88 @@ def _terminal_game_ids(history: pd.DataFrame) -> set[int]:
         "s_no",
     ]
     return set(pd.to_numeric(rows, errors="coerce").dropna().astype(int))
+
+
+def _lineup_wait_required(
+    *,
+    submit_before_start: bool,
+    complete: bool,
+    now_utc: pd.Timestamp,
+    deadline: pd.Timestamp,
+) -> bool:
+    """경기 전 라인업 마감 전일 때만 다음 폴링을 기다린다."""
+
+    return submit_before_start and not complete and now_utc < deadline
+
+
+def _complete_prediction(
+    api: StatizAPI,
+    display: PredictionProgressDisplay,
+    prediction_record: dict[str, Any],
+    payload: dict[str, Any],
+    *,
+    game_time: pd.Timestamp,
+    now_utc: pd.Timestamp,
+) -> tuple[dict[str, Any], bool]:
+    """현재 시각에 따라 예측을 제출하거나 오프라인 기록으로 완료한다."""
+
+    s_no = int(prediction_record["s_no"])
+    probability = float(prediction_record["home_win_probability"])
+    model_type = str(prediction_record["model_type"])
+
+    if not prediction_window_is_open(now_utc, game_time):
+        record = build_offline_prediction_record(
+            prediction_record,
+            recorded_at=datetime.now(SEOUL).isoformat(),
+        )
+        append_prediction_log(PREDICTION_LOG, record)
+        display.advance(
+            s_no,
+            step=6,
+            status=f"미제출 예측 완료 · 홈 승률 {probability:.1%}",
+            model=model_type,
+            delivery="미제출",
+        )
+        return record, True
+
+    display.advance(
+        s_no,
+        step=5,
+        status="API 제출",
+    )
+    try:
+        send_prediction_with_retry(api, payload)
+    except StatizAPIError as exc:
+        record = build_delivery_record(
+            prediction_record,
+            recorded_at=datetime.now(SEOUL).isoformat(),
+            api_status="failed",
+            error_type=exc.__class__.__name__,
+        )
+        append_prediction_log(PREDICTION_LOG, record)
+        display.advance(
+            s_no,
+            step=6,
+            status="제출 실패",
+            delivery="실패",
+            error_type=exc.__class__.__name__,
+        )
+        return record, False
+
+    record = build_delivery_record(
+        prediction_record,
+        recorded_at=datetime.now(SEOUL).isoformat(),
+        api_status="success",
+    )
+    append_prediction_log(PREDICTION_LOG, record)
+    display.advance(
+        s_no,
+        step=6,
+        status=f"제출 완료 · 홈 승률 {probability:.1%}",
+        model=model_type,
+        delivery="성공",
+    )
+    return record, True
 
 
 def _prediction_context(
@@ -325,30 +408,10 @@ def _run_realtime_prediction_system(
             cutoff = pd.Timestamp(target_time["feature_cutoff_datetime"])
             display.register(_game_progress(game, game_time))
             now_utc = pd.Timestamp.now(tz="UTC")
-            if not prediction_window_is_open(now_utc, game_time):
-                expired_record = {
-                    "recorded_at": datetime.now(SEOUL).isoformat(),
-                    "record_type": "expired",
-                    "s_no": s_no,
-                    "game_datetime": game_time.isoformat(),
-                    "feature_cutoff_datetime": cutoff.isoformat(),
-                    "api_status": "expired",
-                    **deployment_context,
-                }
-                append_prediction_log(PREDICTION_LOG, expired_record)
-                log_history = pd.concat(
-                    [log_history, pd.DataFrame([expired_record])],
-                    ignore_index=True,
-                )
-                terminal_s_nos.add(s_no)
-                display.advance(
-                    s_no,
-                    step=6,
-                    status="경기 시작",
-                    delivery="만료",
-                )
-                continue
-
+            submit_before_start = prediction_window_is_open(
+                now_utc,
+                game_time,
+            )
             existing = _existing_prediction(log_history, s_no)
 
             if existing is not None:
@@ -384,7 +447,12 @@ def _run_realtime_prediction_system(
                         live_lineup, home_team, away_team
                     )
                 )
-                if not complete and pd.Timestamp.now(tz="UTC") < deadline:
+                if _lineup_wait_required(
+                    submit_before_start=submit_before_start,
+                    complete=complete,
+                    now_utc=pd.Timestamp.now(tz="UTC"),
+                    deadline=deadline,
+                ):
                     next_poll = (
                         datetime.now(SEOUL)
                         + timedelta(seconds=POLL_SECONDS)
@@ -480,11 +548,12 @@ def _run_realtime_prediction_system(
                     "feature_prior_usage_rate": feature_prior_usage_rate(row),
                     **deployment_context,
                 }
-                append_prediction_log(PREDICTION_LOG, prediction_record)
-                log_history = pd.concat(
-                    [log_history, pd.DataFrame([prediction_record])],
-                    ignore_index=True,
-                )
+                if submit_before_start:
+                    append_prediction_log(PREDICTION_LOG, prediction_record)
+                    log_history = pd.concat(
+                        [log_history, pd.DataFrame([prediction_record])],
+                        ignore_index=True,
+                    )
 
             display.advance(
                 s_no,
@@ -500,52 +569,20 @@ def _run_realtime_prediction_system(
                 home_win_probability=probability,
                 update_time=datetime.now(SEOUL).strftime("%Y-%m-%d %H:%M:%S"),
             )
-            display.advance(
-                s_no,
-                step=5,
-                status="API 제출",
-            )
-            try:
-                send_prediction_with_retry(api, payload)
-            except StatizAPIError as exc:
-                delivery_record = build_delivery_record(
-                    prediction_record,
-                    recorded_at=datetime.now(SEOUL).isoformat(),
-                    api_status="failed",
-                    error_type=exc.__class__.__name__,
-                )
-                append_prediction_log(PREDICTION_LOG, delivery_record)
-                log_history = pd.concat(
-                    [log_history, pd.DataFrame([delivery_record])],
-                    ignore_index=True,
-                )
-                display.advance(
-                    s_no,
-                    step=6,
-                    status="제출 실패",
-                    delivery="실패",
-                    error_type=exc.__class__.__name__,
-                )
-                continue
-
-            delivery_record = build_delivery_record(
+            completion_record, terminal = _complete_prediction(
+                api,
+                display,
                 prediction_record,
-                recorded_at=datetime.now(SEOUL).isoformat(),
-                api_status="success",
+                payload,
+                game_time=game_time,
+                now_utc=pd.Timestamp.now(tz="UTC"),
             )
-            append_prediction_log(PREDICTION_LOG, delivery_record)
             log_history = pd.concat(
-                [log_history, pd.DataFrame([delivery_record])],
+                [log_history, pd.DataFrame([completion_record])],
                 ignore_index=True,
             )
-            terminal_s_nos.add(s_no)
-            display.advance(
-                s_no,
-                step=6,
-                status=f"제출 완료 · 홈 승률 {probability:.1%}",
-                model=model_type,
-                delivery="성공",
-            )
+            if terminal:
+                terminal_s_nos.add(s_no)
         time.sleep(POLL_SECONDS)
 
 

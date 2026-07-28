@@ -82,6 +82,146 @@ class RealtimePredictionTests(unittest.TestCase):
         self.assertEqual(result["model_type"], "primary")
         self.assertEqual(result["error_type"], "")
 
+    def test_complete_prediction_after_start_skips_api_and_logs_offline(self):
+        # 경기 시작 후에는 저장 API를 호출하지 않고 오프라인 로그만 남긴다.
+        from pathlib import Path
+        from tempfile import TemporaryDirectory
+        from unittest.mock import patch
+
+        from predict_2026 import _complete_prediction
+
+        class CountingAPI:
+            def __init__(self):
+                self.post_calls = []
+
+            def post(self, endpoint, payload):
+                self.post_calls.append((endpoint, payload))
+                return {"result_cd": 100}
+
+        class Display:
+            def __init__(self):
+                self.changes = []
+
+            def advance(self, s_no, **changes):
+                self.changes.append((s_no, changes))
+
+        api = CountingAPI()
+        display = Display()
+        prediction = {
+            "recorded_at": "2026-07-28T17:00:00+09:00",
+            "record_type": "prediction",
+            "s_no": 1,
+            "game_datetime": "2026-07-28T18:30:00+09:00",
+            "home_win_probability": 0.61,
+            "model_type": "primary",
+            "evaluation_role": "prospective_holdout",
+            "api_status": "pending",
+        }
+
+        with TemporaryDirectory() as directory:
+            log_path = Path(directory) / "prediction_log.csv"
+            with patch("predict_2026.PREDICTION_LOG", log_path):
+                record, terminal = _complete_prediction(
+                    api,
+                    display,
+                    prediction,
+                    {"s_no": 1},
+                    game_time=pd.Timestamp(
+                        "2026-07-28T18:30:00+09:00"
+                    ),
+                    now_utc=pd.Timestamp(
+                        "2026-07-28T19:00:00+09:00"
+                    ),
+                )
+            saved = pd.read_csv(log_path)
+
+        self.assertEqual(api.post_calls, [])
+        self.assertTrue(terminal)
+        self.assertEqual(record["record_type"], "offline_prediction")
+        self.assertEqual(record["api_status"], "not_submitted")
+        self.assertEqual(saved["record_type"].tolist(), ["offline_prediction"])
+        self.assertEqual(display.changes[-1][1]["delivery"], "미제출")
+
+    def test_complete_prediction_before_start_keeps_successful_submission(self):
+        # 경기 시작 전에는 기존 저장 API를 호출하고 성공 delivery를 남긴다.
+        from pathlib import Path
+        from tempfile import TemporaryDirectory
+        from unittest.mock import patch
+
+        from predict_2026 import _complete_prediction
+
+        class SuccessfulAPI:
+            def __init__(self):
+                self.post_calls = []
+
+            def post(self, endpoint, payload):
+                self.post_calls.append((endpoint, payload))
+                return {"result_cd": 100}
+
+        class Display:
+            def advance(self, s_no, **changes):
+                pass
+
+        api = SuccessfulAPI()
+        prediction = {
+            "recorded_at": "2026-07-28T17:00:00+09:00",
+            "record_type": "prediction",
+            "s_no": 1,
+            "game_datetime": "2026-07-28T18:30:00+09:00",
+            "home_win_probability": 0.61,
+            "model_type": "primary",
+            "api_status": "pending",
+        }
+
+        with TemporaryDirectory() as directory:
+            log_path = Path(directory) / "prediction_log.csv"
+            with patch("predict_2026.PREDICTION_LOG", log_path):
+                record, terminal = _complete_prediction(
+                    api,
+                    Display(),
+                    prediction,
+                    {
+                        "ptt_idx": "05",
+                        "s_no": 1,
+                        "homeTeam": "홈",
+                        "awayTeam": "원정",
+                        "predictWinTeam": "홈",
+                        "percent": 61.0,
+                        "update_time": "2026-07-28 18:00:00",
+                    },
+                    game_time=pd.Timestamp(
+                        "2026-07-28T18:30:00+09:00"
+                    ),
+                    now_utc=pd.Timestamp(
+                        "2026-07-28T18:00:00+09:00"
+                    ),
+                )
+            saved = pd.read_csv(log_path)
+
+        self.assertEqual(
+            [call[0] for call in api.post_calls],
+            ["prediction/savePrediction"],
+        )
+        self.assertTrue(terminal)
+        self.assertEqual(record["record_type"], "delivery")
+        self.assertEqual(record["api_status"], "success")
+        self.assertEqual(saved["record_type"].tolist(), ["delivery"])
+
+    def test_incomplete_lineup_after_start_does_not_wait(self):
+        # 경기 후에는 라인업을 기다리지 않고 대체 확률 계산으로 진행한다.
+        from predict_2026 import _lineup_wait_required
+
+        start = pd.Timestamp("2026-07-28T18:30:00+09:00")
+
+        self.assertFalse(
+            _lineup_wait_required(
+                submit_before_start=False,
+                complete=False,
+                now_utc=start + pd.Timedelta(minutes=30),
+                deadline=start - pd.Timedelta(minutes=30),
+            )
+        )
+
     def test_prediction_window_closes_at_game_start(self):
         # 경기 시작 시각과 그 이후의 신규 예측·전송을 차단한다.
         from realtime_prediction import prediction_window_is_open
