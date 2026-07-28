@@ -218,6 +218,15 @@ def _terminal_game_ids(history: pd.DataFrame) -> set[int]:
     return set(pd.to_numeric(rows, errors="coerce").dropna().astype(int))
 
 
+def _today_games_complete(
+    today_games: list[dict[str, Any]],
+    terminal_s_nos: set[int],
+) -> bool:
+    """오늘 일정의 모든 경기가 최종 처리됐는지 확인한다."""
+
+    return all(int(game["s_no"]) in terminal_s_nos for game in today_games)
+
+
 def _lineup_wait_required(
     *,
     submit_before_start: bool,
@@ -653,6 +662,9 @@ def _run_realtime_prediction_system(
             )
             if terminal:
                 terminal_s_nos.add(s_no)
+        if _today_games_complete(today_games, terminal_s_nos):
+            display.set_waiting("오늘 경기 예측 처리 완료")
+            return
         time.sleep(POLL_SECONDS)
 
 

@@ -232,6 +232,15 @@ class RealtimePredictionTests(unittest.TestCase):
 
         self.assertEqual(_terminal_game_ids(history), {1, 4})
 
+    def test_today_games_complete_requires_every_game_to_be_terminal(self):
+        # 오늘 경기 전체가 완료된 경우에만 추가 폴링 없이 종료할 수 있다.
+        from predict_2026 import _today_games_complete
+
+        games = [{"s_no": 1}, {"s_no": 2}]
+
+        self.assertTrue(_today_games_complete(games, {1, 2}))
+        self.assertFalse(_today_games_complete(games, {1}))
+
     def test_offline_record_preserves_prediction_and_marks_non_submission(self):
         # 재사용한 확률·모델은 유지하고 경기 후 기록은 회고 진단으로 격리한다.
         from realtime_prediction import build_offline_prediction_record
