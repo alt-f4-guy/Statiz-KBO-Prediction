@@ -217,6 +217,7 @@ def collect_player_snapshots(
     target_date: date | None = None,
     request_interval: float = 0.3,
     sleep: Callable[[float], None] = time.sleep,
+    progress_callback: Callable[[int, int, int, int], None] | None = None,
 ) -> list[dict[str, Any]]:
     """선수별 필요한 연도를 호출하고 실패도 재시도 가능한 스냅샷으로 남긴다."""
 
@@ -242,8 +243,9 @@ def collect_player_snapshots(
         target_date=collection_date,
     )
     failures: list[dict[str, Any]] = []
+    success_count = 0
 
-    for p_no in player_numbers:
+    for player_index, p_no in enumerate(player_numbers, start=1):
         day_years = years_to_collect(
             p_no=int(p_no),
             years=years,
@@ -272,6 +274,9 @@ def collect_player_snapshots(
                 for year in season_years
             ]
             _append_snapshots(season_snapshot_path, season_rows)
+            success_count += sum(
+                row["response_status"] == "success" for row in season_rows
+            )
             failures.extend(
                 row for row in season_rows if row["response_status"] != "success"
             )
@@ -289,7 +294,17 @@ def collect_player_snapshots(
                 fetched_at=datetime.now(SEOUL).isoformat(),
             )
             _append_snapshots(day_snapshot_path, [row])
-            if row["response_status"] != "success":
+            if row["response_status"] == "success":
+                success_count += 1
+            else:
                 failures.append(row)
+
+        if progress_callback is not None:
+            progress_callback(
+                player_index,
+                int(p_no),
+                success_count,
+                len(failures),
+            )
 
     return failures

@@ -200,6 +200,40 @@ class PlayerStatsCollectionTests(unittest.TestCase):
         self.assertEqual(failures, [])
         self.assertEqual(waits, [0.3, 0.3, 0.3])
 
+    def test_player_collection_reports_progress_after_each_player(self):
+        from player_stats_collection import collect_player_snapshots
+
+        class SuccessfulAPI:
+            def get(self, path, params):
+                if path == "prediction/playerSeason":
+                    return {
+                        "result_cd": 100,
+                        "batting": {"list": [{"year": 2025}]},
+                    }
+                return {"result_cd": 100, "games": []}
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            progress_events = []
+
+            failures = collect_player_snapshots(
+                SuccessfulAPI(),
+                [10, 20],
+                [2025],
+                2026,
+                root / "day.csv",
+                root / "season.csv",
+                target_date=date(2026, 7, 28),
+                sleep=lambda _: None,
+                progress_callback=lambda *event: progress_events.append(event),
+            )
+
+        self.assertEqual(failures, [])
+        self.assertEqual(
+            progress_events,
+            [(1, 10, 2, 0), (2, 20, 4, 0)],
+        )
+
     def test_final_api_failure_stops_before_next_player(self):
         from player_stats_collection import collect_player_snapshots
         from statiz_api import StatizAPIError
