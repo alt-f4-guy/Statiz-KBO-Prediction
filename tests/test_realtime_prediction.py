@@ -23,19 +23,64 @@ class RealtimePredictionTests(unittest.TestCase):
         self.assertEqual(progress.matchup, "키움 @ LG")
         self.assertEqual(progress.start_time, "18:30")
 
-    def test_terminal_games_include_success_and_expired_only(self):
-        # 재시작 후 성공 경기와 이미 시작한 경기만 종료 상태로 복원한다.
+    def test_terminal_games_include_success_and_offline_only(self):
+        # 만료 이력은 재처리하고 성공 제출·오프라인 예측만 완료로 복원한다.
         from predict_2026 import _terminal_game_ids
 
         history = pd.DataFrame(
             {
-                "record_type": ["delivery", "delivery", "expired"],
-                "api_status": ["success", "failed", "expired"],
-                "s_no": [1, 2, 3],
+                "record_type": [
+                    "delivery",
+                    "delivery",
+                    "expired",
+                    "offline_prediction",
+                ],
+                "api_status": [
+                    "success",
+                    "failed",
+                    "expired",
+                    "not_submitted",
+                ],
+                "s_no": [1, 2, 3, 4],
             }
         )
 
-        self.assertEqual(_terminal_game_ids(history), {1, 3})
+        self.assertEqual(_terminal_game_ids(history), {1, 4})
+
+    def test_offline_record_preserves_prediction_and_marks_non_submission(self):
+        # 재사용한 확률·모델은 유지하고 경기 후 기록은 회고 진단으로 격리한다.
+        from realtime_prediction import build_offline_prediction_record
+
+        prediction = {
+            "recorded_at": "2026-07-28T17:00:00+09:00",
+            "record_type": "prediction",
+            "s_no": 1,
+            "home_win_probability": 0.61,
+            "model_type": "primary",
+            "evaluation_role": "prospective_holdout",
+            "api_status": "pending",
+            "error_type": "old",
+        }
+
+        result = build_offline_prediction_record(
+            prediction,
+            recorded_at="2026-07-28T19:00:00+09:00",
+        )
+
+        self.assertEqual(
+            result["recorded_at"],
+            "2026-07-28T19:00:00+09:00",
+        )
+        self.assertEqual(result["record_type"], "offline_prediction")
+        self.assertEqual(result["api_status"], "not_submitted")
+        self.assertEqual(
+            result["evaluation_role"],
+            "retrospective_diagnostic",
+        )
+        self.assertEqual(result["prediction_mode"], "offline_after_start")
+        self.assertEqual(result["home_win_probability"], 0.61)
+        self.assertEqual(result["model_type"], "primary")
+        self.assertEqual(result["error_type"], "")
 
     def test_prediction_window_closes_at_game_start(self):
         # 경기 시작 시각과 그 이후의 신규 예측·전송을 차단한다.

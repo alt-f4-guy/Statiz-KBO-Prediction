@@ -134,12 +134,12 @@ def _existing_prediction(history: pd.DataFrame, s_no: int) -> pd.Series | None:
 
 
 def _terminal_game_ids(history: pd.DataFrame) -> set[int]:
-    """성공적으로 전달됐거나 경기 시작으로 만료된 경기 ID를 복원한다."""
+    """성공적으로 전달됐거나 오프라인 예측한 경기 ID를 복원한다."""
 
     if history.empty or "record_type" not in history.columns:
         return set()
     rows = history.loc[
-        history["record_type"].eq("expired")
+        history["record_type"].eq("offline_prediction")
         | (
             history["record_type"].eq("delivery")
             & history.get(

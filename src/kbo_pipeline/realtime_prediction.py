@@ -73,6 +73,24 @@ def build_delivery_record(
     }
 
 
+def build_offline_prediction_record(
+    prediction_record: dict[str, Any],
+    *,
+    recorded_at: str,
+) -> dict[str, Any]:
+    """예측값을 제출하지 않는 경기 후 회고 진단 기록으로 변환한다."""
+
+    return {
+        **prediction_record,
+        "recorded_at": recorded_at,
+        "record_type": "offline_prediction",
+        "api_status": "not_submitted",
+        "error_type": "",
+        "evaluation_role": "retrospective_diagnostic",
+        "prediction_mode": "offline_after_start",
+    }
+
+
 def build_prediction_payload(
     *,
     ptt_idx: str,
