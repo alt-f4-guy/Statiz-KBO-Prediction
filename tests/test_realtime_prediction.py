@@ -4,6 +4,12 @@ import pandas as pd
 
 
 class RealtimePredictionTests(unittest.TestCase):
+    def test_prediction_api_polling_interval_is_ten_minutes(self):
+        # 일정과 라인업 API의 반복 조회 주기는 10분으로 제한한다.
+        from predict_2026 import POLL_SECONDS
+
+        self.assertEqual(POLL_SECONDS, 10 * 60)
+
     def test_game_progress_uses_matchup_and_seoul_start_time(self):
         # 경기 행은 원정 @ 홈과 서울 현지 시작 시각을 표시한다.
         from predict_2026 import _game_progress

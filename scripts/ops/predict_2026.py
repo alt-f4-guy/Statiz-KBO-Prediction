@@ -45,7 +45,7 @@ from statiz_api import StatizAPI, StatizAPIError
 
 
 SEOUL = ZoneInfo("Asia/Seoul")
-POLL_SECONDS = 60
+POLL_SECONDS = 10 * 60
 LINEUP_DEADLINE_MINUTES = 30
 PREDICTION_LOG = OPERATIONS_DIR / "prediction_log.csv"
 TEAM_NAME_MAP = {
