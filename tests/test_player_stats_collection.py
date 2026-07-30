@@ -164,7 +164,7 @@ class PlayerStatsCollectionTests(unittest.TestCase):
 
         self.assertEqual(result, [2026])
 
-    def test_player_requests_are_spaced_by_configured_interval(self):
+    def test_player_requests_use_five_second_default_interval(self):
         from player_stats_collection import collect_player_snapshots
 
         class SuccessfulAPI:
@@ -193,12 +193,11 @@ class PlayerStatsCollectionTests(unittest.TestCase):
                 root / "day.csv",
                 root / "season.csv",
                 target_date=date(2026, 7, 28),
-                request_interval=0.3,
                 sleep=waits.append,
             )
 
         self.assertEqual(failures, [])
-        self.assertEqual(waits, [0.3, 0.3, 0.3])
+        self.assertEqual(waits, [5.0, 5.0, 5.0])
 
     def test_player_collection_reports_progress_after_each_player(self):
         from player_stats_collection import collect_player_snapshots

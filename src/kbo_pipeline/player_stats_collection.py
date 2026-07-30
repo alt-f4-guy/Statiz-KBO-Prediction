@@ -215,7 +215,7 @@ def collect_player_snapshots(
     season_snapshot_path: Path,
     *,
     target_date: date | None = None,
-    request_interval: float = 0.3,
+    request_interval: float = 5.0,
     sleep: Callable[[float], None] = time.sleep,
     progress_callback: Callable[[int, int, int, int], None] | None = None,
 ) -> list[dict[str, Any]]:

@@ -86,7 +86,7 @@ def run_collection():
             all_lineups = []
             pbar.set_postfix({"Success": success_count})
         
-        time.sleep(0.3)
+        time.sleep(3.0)
 
     if all_lineups:
         df_new = pd.DataFrame(all_lineups)

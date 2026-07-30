@@ -91,7 +91,7 @@ def run_roster_collection():
             df_existing = pd.read_csv(output_file)
             all_rosters = []
         
-        time.sleep(0.3)
+        time.sleep(3.0)
 
     # 4. 최종 저장
     if all_rosters:
