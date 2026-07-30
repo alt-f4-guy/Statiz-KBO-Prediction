@@ -140,7 +140,7 @@ def _load_today_games(
         raise
 
     api_games = (
-        list(schedule.get(local_now.strftime("%Y%m%d"), []))
+        list(schedule.get(local_now.strftime("%m%d"), []))
         if isinstance(schedule, dict)
         else []
     )

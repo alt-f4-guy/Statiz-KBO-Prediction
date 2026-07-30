@@ -125,14 +125,14 @@ class RealtimePredictionTests(unittest.TestCase):
                 now_utc=pd.Timestamp("2026-07-28T18:00:00+09:00"),
             )
 
-    def test_successful_schedule_keeps_api_games(self):
+    def test_successful_schedule_uses_month_day_key(self):
         # 정상 응답이 있으면 로컬 데이터가 아니라 API의 오늘 일정을 사용한다.
         from predict_2026 import _load_today_games
 
         class SuccessfulAPI:
             def get(self, endpoint, params):
                 return {
-                    "20260728": [
+                    "0728": [
                         {
                             "s_no": 10,
                             "homeTeam": 5002,
@@ -143,7 +143,7 @@ class RealtimePredictionTests(unittest.TestCase):
 
         result, used_local = _load_today_games(
             SuccessfulAPI(),
-            pd.DataFrame(),
+            pd.DataFrame(columns=["gameDate"]),
             now_utc=pd.Timestamp("2026-07-28T17:00:00+09:00"),
         )
 

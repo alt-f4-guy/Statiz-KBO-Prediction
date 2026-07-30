@@ -164,7 +164,7 @@ class PlayerStatsCollectionTests(unittest.TestCase):
 
         self.assertEqual(result, [2026])
 
-    def test_player_requests_use_five_second_default_interval(self):
+    def test_player_requests_use_point_seven_second_default_interval(self):
         from player_stats_collection import collect_player_snapshots
 
         class SuccessfulAPI:
@@ -197,7 +197,7 @@ class PlayerStatsCollectionTests(unittest.TestCase):
             )
 
         self.assertEqual(failures, [])
-        self.assertEqual(waits, [5.0, 5.0, 5.0])
+        self.assertEqual(waits, [0.7, 0.7, 0.7])
 
     def test_player_collection_reports_progress_after_each_player(self):
         from player_stats_collection import collect_player_snapshots
