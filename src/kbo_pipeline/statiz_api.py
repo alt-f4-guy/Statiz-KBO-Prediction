@@ -8,12 +8,29 @@ import logging
 import math
 import time
 from typing import Any, Callable, Mapping
-from urllib.parse import quote
+from urllib.parse import quote, urlencode
 
 import requests
 
 
 LOGGER = logging.getLogger(__name__)
+
+
+def extract_players(payload: Any) -> list[dict[str, Any]]:
+    """중첩된 라인업 응답에서 선수 행만 순서대로 추출한다."""
+
+    if isinstance(payload, dict):
+        if "p_no" in payload:
+            return [payload]
+        return [
+            player
+            for key, value in payload.items()
+            if key not in {"result_cd", "result_msg", "update_time"}
+            for player in extract_players(value)
+        ]
+    if isinstance(payload, list):
+        return [player for item in payload for player in extract_players(item)]
+    return []
 
 
 class StatizAPIError(RuntimeError):
@@ -78,11 +95,7 @@ class StatizAPI:
     def _query_string(params: Mapping[str, Any]) -> tuple[dict[str, str], str]:
         safe = "-_.!~*'()"
         normalized = {key: str(params[key]) for key in sorted(params)}
-        query_string = "&".join(
-            f"{quote(key, safe=safe)}={quote(value, safe=safe)}"
-            for key, value in normalized.items()
-        )
-        return normalized, query_string
+        return normalized, urlencode(normalized, quote_via=quote, safe=safe)
 
     def _decode(self, response: requests.Response, path: str) -> Any:
         if response.status_code != 200:

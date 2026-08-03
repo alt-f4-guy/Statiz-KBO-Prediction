@@ -156,14 +156,6 @@ def _prepare_events(
     return pitching.reset_index(drop=True), batting.reset_index(drop=True)
 
 
-def _build_prior_constants(
-    pitching: pd.DataFrame,
-    batting: pd.DataFrame,
-) -> pd.DataFrame:
-    constants = calculate_kbo_year_constants(pitching)
-    return add_batting_environment(constants, batting)
-
-
 def _build_asof_constants(
     games: pd.DataFrame,
     pitching: pd.DataFrame,
@@ -811,7 +803,9 @@ def build_feature_matrix_v9(
 
     game_rows = _prepare_games(games, include_unscored=include_unscored)
     pitching, batting = _prepare_events(day, game_rows)
-    prior_constants = _build_prior_constants(pitching, batting)
+    prior_constants = add_batting_environment(
+        calculate_kbo_year_constants(pitching), batting
+    )
     asof_constants = _build_asof_constants(game_rows, pitching, batting, prior_constants)
     prior_pitcher = _prior_pitcher_table(season, prior_constants)
 

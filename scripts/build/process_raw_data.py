@@ -47,18 +47,12 @@ def main() -> None:
 
     day.to_csv(day_path, index=False, encoding="utf-8-sig")
     season.to_csv(season_path, index=False, encoding="utf-8-sig")
-    errors = (
-        day_errors.assign(dataset="day")
-        if season_errors.empty
-        else season_errors.assign(dataset="season")
-        if day_errors.empty
-        else pd.concat(
-            [
-                day_errors.assign(dataset="day"),
-                season_errors.assign(dataset="season"),
-            ],
-            ignore_index=True,
-        )
+    errors = pd.concat(
+        [
+            day_errors.assign(dataset="day"),
+            season_errors.assign(dataset="season"),
+        ],
+        ignore_index=True,
     )
     errors.to_csv(error_path, index=False, encoding="utf-8-sig")
 

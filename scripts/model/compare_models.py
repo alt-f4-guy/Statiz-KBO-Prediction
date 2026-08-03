@@ -13,10 +13,6 @@ from classifier_model import prepare_classifier_frame, probability_metrics
 from pipeline_config import EVALUATIONS_DIR, FINAL_DATA_DIR, MODEL_DIR
 
 
-class ModelComparisonError(ValueError):
-    """모델 간 공정 비교 계약 위반."""
-
-
 def build_operating_metadata(
     *,
     selected: str,
@@ -49,11 +45,11 @@ def assert_same_evaluation_games(predictions: pd.DataFrame) -> None:
         for model, group in predictions.groupby("model")
     }
     if not groups:
-        raise ModelComparisonError("비교할 예측이 없습니다.")
+        raise ValueError("비교할 예측이 없습니다.")
     reference_model, reference_ids = next(iter(groups.items()))
     for model, ids in groups.items():
         if ids != reference_ids:
-            raise ModelComparisonError(
+            raise ValueError(
                 f"평가 경기 ID가 동일하지 않습니다: {reference_model}, {model}"
             )
 

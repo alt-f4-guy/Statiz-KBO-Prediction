@@ -6,22 +6,22 @@ import pandas as pd
 class FinalDatasetContractTests(unittest.TestCase):
     def test_duplicate_game_id_is_rejected(self):
         # 동일 경기를 중복 학습시키는 데이터 계약 위반을 막는다.
-        from dataset_contract import DatasetContractError, validate_final_dataset
+        from dataset_contract import validate_final_dataset
 
         data = self._valid_rows()
         data.loc[1, "s_no"] = data.loc[0, "s_no"]
 
-        with self.assertRaisesRegex(DatasetContractError, "s_no 중복"):
+        with self.assertRaisesRegex(ValueError, "s_no 중복"):
             validate_final_dataset(data)
 
     def test_future_feature_cutoff_is_rejected(self):
         # 경기 시작 이후 정보가 피처에 들어가는 시점 누수를 막는다.
-        from dataset_contract import DatasetContractError, validate_final_dataset
+        from dataset_contract import validate_final_dataset
 
         data = self._valid_rows()
         data.loc[0, "feature_cutoff_datetime"] = data.loc[0, "game_datetime"]
 
-        with self.assertRaisesRegex(DatasetContractError, "기준시각"):
+        with self.assertRaisesRegex(ValueError, "기준시각"):
             validate_final_dataset(data)
 
     def test_prediction_mode_keeps_unscored_schedule_row(self):

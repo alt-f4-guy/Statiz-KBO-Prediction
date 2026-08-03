@@ -125,7 +125,8 @@ class AsofFeatureTests(unittest.TestCase):
         self.assertEqual(result.tolist(), [10.0, 2.0, 4.0])
 
     def test_future_events_do_not_alter_past_features(self):
-        from feature_matrix_v9 import _build_prior_constants, _build_asof_constants
+        from feature_matrix_v9 import _build_asof_constants
+        from sabermetrics import add_batting_environment, calculate_kbo_year_constants
 
         games = pd.DataFrame(
             {
@@ -167,7 +168,7 @@ class AsofFeatureTests(unittest.TestCase):
             }
         )
 
-        prior = _build_prior_constants(pitching, batting)
+        prior = add_batting_environment(calculate_kbo_year_constants(pitching), batting)
         orig_asof = _build_asof_constants(games, pitching, batting, prior)
 
         changed_pitching = pitching.copy()
@@ -184,7 +185,8 @@ class AsofFeatureTests(unittest.TestCase):
 
     def test_first_year_asof_constants_use_explicit_league_prior(self):
         # 이전 시즌과 완료 경기 기록이 모두 없는 최초 경기의 핵심 피처 결측을 막는다.
-        from feature_matrix_v9 import _build_asof_constants, _build_prior_constants
+        from feature_matrix_v9 import _build_asof_constants
+        from sabermetrics import add_batting_environment, calculate_kbo_year_constants
 
         games = pd.DataFrame(
             {
@@ -219,7 +221,7 @@ class AsofFeatureTests(unittest.TestCase):
                 "PA": [40.0],
             }
         )
-        prior = _build_prior_constants(pitching, batting)
+        prior = add_batting_environment(calculate_kbo_year_constants(pitching), batting)
 
         result = _build_asof_constants(games, pitching, batting, prior).iloc[0]
 

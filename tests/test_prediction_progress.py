@@ -4,9 +4,9 @@ import unittest
 class PredictionProgressTests(unittest.TestCase):
     def test_new_game_starts_at_schedule_check(self):
         # 새 경기는 일정 확인 단계와 제출 대기 상태로 시작한다.
-        from prediction_progress import create_game_progress
+        from prediction_progress import GameProgress
 
-        progress = create_game_progress(
+        progress = GameProgress(
             s_no=20260496,
             matchup="키움 @ LG",
             start_time="18:30",
@@ -20,11 +20,11 @@ class PredictionProgressTests(unittest.TestCase):
     def test_progress_never_moves_backward(self):
         # 늦게 도착한 폴링 상태가 이미 진행된 단계를 되돌리면 안 된다.
         from prediction_progress import (
+            GameProgress,
             advance_game_progress,
-            create_game_progress,
         )
 
-        progress = create_game_progress(1, "원정 @ 홈", "18:30")
+        progress = GameProgress(1, "원정 @ 홈", "18:30")
         progressed = advance_game_progress(
             progress,
             step=4,
@@ -39,83 +39,24 @@ class PredictionProgressTests(unittest.TestCase):
 
         self.assertEqual(stale, progressed)
 
-    def test_summary_counts_success_expired_waiting_and_failure(self):
-        # 성공·만료는 완료, 실패는 실패, 나머지는 대기로 집계한다.
-        from prediction_progress import (
-            advance_game_progress,
-            create_game_progress,
-            summarize_progress,
-        )
-
-        waiting = create_game_progress(1, "A @ B", "18:30")
-        success = advance_game_progress(
-            create_game_progress(2, "C @ D", "18:30"),
-            step=6,
-            status="제출 완료",
-            delivery="성공",
-        )
-        expired = advance_game_progress(
-            create_game_progress(3, "E @ F", "18:30"),
-            step=6,
-            status="경기 시작",
-            delivery="만료",
-        )
-        failed = advance_game_progress(
-            create_game_progress(4, "G @ H", "18:30"),
-            step=6,
-            status="제출 실패",
-            delivery="실패",
-            error_type="StatizAPIError",
-        )
-
-        summary = summarize_progress(
-            {1: waiting, 2: success, 3: expired, 4: failed}
-        )
-
-        self.assertEqual(summary.total, 4)
-        self.assertEqual(summary.completed, 2)
-        self.assertEqual(summary.waiting, 1)
-        self.assertEqual(summary.failed, 1)
-
-    def test_summary_counts_offline_prediction_as_completed(self):
-        # 의도적으로 제출하지 않은 경기 후 예측은 실패가 아니라 완료다.
-        from prediction_progress import (
-            advance_game_progress,
-            create_game_progress,
-            summarize_progress,
-        )
-
-        offline = advance_game_progress(
-            create_game_progress(1, "원정 @ 홈", "18:30"),
-            step=6,
-            status="미제출 예측 완료 · 홈 승률 61.0%",
-            delivery="미제출",
-        )
-
-        summary = summarize_progress({1: offline})
-
-        self.assertEqual(summary.completed, 1)
-        self.assertEqual(summary.waiting, 0)
-        self.assertEqual(summary.failed, 0)
-
     def test_rendered_view_contains_preparation_summary_and_game_rows(self):
         # 실제 Rich 출력에 준비 상태, 전체 집계와 경기별 상태가 나타난다.
         from rich.console import Console
 
         from prediction_progress import (
+            GameProgress,
             advance_game_progress,
             build_progress_view,
-            create_game_progress,
         )
 
         games = {
             1: advance_game_progress(
-                create_game_progress(1, "키움 @ LG", "18:30"),
+                GameProgress(1, "키움 @ LG", "18:30"),
                 step=2,
                 status="라인업 대기 · 다음 조회 17:31:00",
             ),
             2: advance_game_progress(
-                create_game_progress(2, "두산 @ SSG", "18:30"),
+                GameProgress(2, "두산 @ SSG", "18:30"),
                 step=6,
                 status="제출 완료",
                 model="primary",

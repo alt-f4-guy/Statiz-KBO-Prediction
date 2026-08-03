@@ -6,10 +6,6 @@ import numpy as np
 import pandas as pd
 
 
-class DatasetContractError(ValueError):
-    """학습을 중단해야 하는 데이터 계약 위반."""
-
-
 REQUIRED_COLUMNS = {
     "s_no",
     "game_datetime",
@@ -27,26 +23,26 @@ def validate_final_dataset(data: pd.DataFrame) -> None:
 
     missing = REQUIRED_COLUMNS.difference(data.columns)
     if missing:
-        raise DatasetContractError(f"필수 열 누락: {sorted(missing)}")
+        raise ValueError(f"필수 열 누락: {sorted(missing)}")
     if data.empty:
-        raise DatasetContractError("학습 데이터가 비어 있습니다.")
+        raise ValueError("학습 데이터가 비어 있습니다.")
     if data["s_no"].duplicated().any():
-        raise DatasetContractError("s_no 중복이 존재합니다.")
+        raise ValueError("s_no 중복이 존재합니다.")
 
     game_time = pd.to_datetime(data["game_datetime"], errors="coerce", utc=True)
     cutoff = pd.to_datetime(
         data["feature_cutoff_datetime"], errors="coerce", utc=True
     )
     if game_time.isna().any() or cutoff.isna().any():
-        raise DatasetContractError("경기 또는 피처 기준시각 파싱에 실패했습니다.")
+        raise ValueError("경기 또는 피처 기준시각 파싱에 실패했습니다.")
     if cutoff.ge(game_time).any():
-        raise DatasetContractError("피처 기준시각이 경기 시작시각보다 이르지 않습니다.")
+        raise ValueError("피처 기준시각이 경기 시작시각보다 이르지 않습니다.")
 
     scores = data[["homeScore", "awayScore"]].apply(
         pd.to_numeric, errors="coerce"
     )
     if scores.isna().any().any() or scores.lt(0).any().any():
-        raise DatasetContractError("목표 점수에 결측 또는 음수가 존재합니다.")
+        raise ValueError("목표 점수에 결측 또는 음수가 존재합니다.")
 
     home_features = {
         column.removeprefix("home_")
@@ -60,11 +56,11 @@ def validate_final_dataset(data: pd.DataFrame) -> None:
     }
     if home_features != away_features:
         difference = sorted(home_features.symmetric_difference(away_features))
-        raise DatasetContractError(f"홈·원정 피처 비대칭: {difference}")
+        raise ValueError(f"홈·원정 피처 비대칭: {difference}")
 
     numeric = data.select_dtypes(include=[np.number])
     if np.isinf(numeric.to_numpy()).any():
-        raise DatasetContractError("수치 피처에 무한대가 존재합니다.")
+        raise ValueError("수치 피처에 무한대가 존재합니다.")
 
 
 def build_feature_coverage(data: pd.DataFrame) -> pd.DataFrame:

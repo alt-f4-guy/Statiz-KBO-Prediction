@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import numpy as np
 import pandas as pd
 
@@ -101,14 +99,3 @@ def build_game_datetime_reference(games: pd.DataFrame) -> pd.DataFrame:
     return result[columns].sort_values(["game_datetime", "s_no"]).reset_index(
         drop=True
     )
-
-
-
-def save_game_datetime_reference(games_path: Path, output_path: Path) -> pd.DataFrame:
-    """경기 원천 파일에서 시각 참조표를 생성해 저장한다."""
-
-    games = pd.read_csv(games_path)
-    reference = build_game_datetime_reference(games)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    reference.to_csv(output_path, index=False, encoding="utf-8-sig")
-    return reference

@@ -29,7 +29,6 @@ from prediction_progress import (
     GameProgress,
     PredictionProgressDisplay,
     advance_game_progress,
-    create_game_progress,
 )
 from realtime_prediction import (
     append_prediction_log,
@@ -41,7 +40,7 @@ from realtime_prediction import (
     select_prediction_probability,
     send_prediction_with_retry,
 )
-from statiz_api import StatizAPI, StatizAPIError
+from statiz_api import StatizAPI, StatizAPIError, extract_players
 
 
 SEOUL = ZoneInfo("Asia/Seoul")
@@ -80,10 +79,10 @@ def _game_progress(
     home_name = _team_name(game["homeTeam"], game.get("homeTeamName"))
     away_name = _team_name(game["awayTeam"], game.get("awayTeamName"))
     start_time = game_time.tz_convert(SEOUL).strftime("%H:%M")
-    return create_game_progress(
-        int(game["s_no"]),
-        f"{away_name} @ {home_name}",
-        start_time,
+    return GameProgress(
+        s_no=int(game["s_no"]),
+        matchup=f"{away_name} @ {home_name}",
+        start_time=start_time,
     )
 
 
@@ -153,26 +152,6 @@ def _load_today_games(
     return [], False
 
 
-def _extract_players(payload: Any) -> list[dict[str, Any]]:
-    if isinstance(payload, list):
-        direct = [item for item in payload if isinstance(item, dict) and "p_no" in item]
-        nested = [
-            player
-            for item in payload
-            if not (isinstance(item, dict) and "p_no" in item)
-            for player in _extract_players(item)
-        ]
-        return direct + nested
-    if isinstance(payload, dict):
-        return [
-            player
-            for key, value in payload.items()
-            if key not in {"result_cd", "result_msg", "update_time"}
-            for player in _extract_players(value)
-        ]
-    return []
-
-
 def _lineup_is_complete(
     lineup: pd.DataFrame,
     home_team: int,
@@ -183,12 +162,6 @@ def _lineup_is_complete(
         team_codes.eq(home_team).sum() >= 9
         and team_codes.eq(away_team).sum() >= 9
     )
-
-
-def _load_prediction_history() -> pd.DataFrame:
-    if not PREDICTION_LOG.exists():
-        return pd.DataFrame()
-    return pd.read_csv(PREDICTION_LOG)
 
 
 def _existing_prediction(history: pd.DataFrame, s_no: int) -> pd.Series | None:
@@ -217,15 +190,6 @@ def _terminal_game_ids(history: pd.DataFrame) -> set[int]:
         "s_no",
     ]
     return set(pd.to_numeric(rows, errors="coerce").dropna().astype(int))
-
-
-def _today_games_complete(
-    today_games: list[dict[str, Any]],
-    terminal_s_nos: set[int],
-) -> bool:
-    """오늘 일정의 모든 경기가 최종 처리됐는지 확인한다."""
-
-    return all(int(game["s_no"]) in terminal_s_nos for game in today_games)
 
 
 def _completed_game_progress(
@@ -257,18 +221,6 @@ def _completed_game_progress(
         model=str(record["model_type"]),
         delivery=delivery,
     )
-
-
-def _lineup_wait_required(
-    *,
-    submit_before_start: bool,
-    complete: bool,
-    now_utc: pd.Timestamp,
-    deadline: pd.Timestamp,
-) -> bool:
-    """경기 전 라인업 마감 전일 때만 다음 폴링을 기다린다."""
-
-    return submit_before_start and not complete and now_utc < deadline
 
 
 def _complete_prediction(
@@ -454,7 +406,11 @@ def _run_realtime_prediction_system(
             git_commit,
         )
 
-    log_history = _load_prediction_history()
+    log_history = (
+        pd.read_csv(PREDICTION_LOG)
+        if PREDICTION_LOG.exists()
+        else pd.DataFrame()
+    )
     terminal_s_nos = _terminal_game_ids(log_history)
 
     while True:
@@ -549,6 +505,7 @@ def _run_realtime_prediction_system(
                 game_time,
             )
             existing = _existing_prediction(log_history, s_no)
+            is_new_prediction = existing is None
 
             if existing is not None:
                 prediction_record = existing.to_dict()
@@ -567,7 +524,7 @@ def _run_realtime_prediction_system(
                     lineup_payload = api.get(
                         "prediction/gameLineup", {"s_no": s_no}
                     )
-                    players = _extract_players(lineup_payload)
+                    players = extract_players(lineup_payload)
                 except StatizAPIError:
                     players = []
                 live_lineup = pd.DataFrame(players)
@@ -583,12 +540,9 @@ def _run_realtime_prediction_system(
                         live_lineup, home_team, away_team
                     )
                 )
-                if _lineup_wait_required(
-                    submit_before_start=submit_before_start,
-                    complete=complete,
-                    now_utc=pd.Timestamp.now(tz="UTC"),
-                    deadline=deadline,
-                ):
+                if submit_before_start and not complete and pd.Timestamp.now(
+                    tz="UTC"
+                ) < deadline:
                     next_poll = (
                         datetime.now(SEOUL)
                         + timedelta(seconds=POLL_SECONDS)
@@ -649,16 +603,16 @@ def _run_realtime_prediction_system(
                 )
                 game_datetime = game_time.isoformat()
                 feature_cutoff = cutoff.isoformat()
-                payload = build_prediction_payload(
-                    ptt_idx=credentials.ptt_idx or "",
-                    s_no=s_no,
-                    home_team_name=home_name,
-                    away_team_name=away_name,
-                    home_win_probability=probability,
-                    update_time=datetime.now(SEOUL).strftime(
-                        "%Y-%m-%d %H:%M:%S"
-                    ),
-                )
+
+            payload = build_prediction_payload(
+                ptt_idx=credentials.ptt_idx or "",
+                s_no=s_no,
+                home_team_name=home_name,
+                away_team_name=away_name,
+                home_win_probability=probability,
+                update_time=datetime.now(SEOUL).strftime("%Y-%m-%d %H:%M:%S"),
+            )
+            if is_new_prediction:
                 prediction_record = {
                     "recorded_at": datetime.now(SEOUL).isoformat(),
                     "record_type": "prediction",
@@ -697,14 +651,6 @@ def _run_realtime_prediction_system(
                 status=fallback_reason or "모델 추론 완료",
                 model=model_type,
             )
-            payload = build_prediction_payload(
-                ptt_idx=credentials.ptt_idx or "",
-                s_no=s_no,
-                home_team_name=home_name,
-                away_team_name=away_name,
-                home_win_probability=probability,
-                update_time=datetime.now(SEOUL).strftime("%Y-%m-%d %H:%M:%S"),
-            )
             completion_record, terminal = _complete_prediction(
                 api,
                 display,
@@ -719,7 +665,7 @@ def _run_realtime_prediction_system(
             )
             if terminal:
                 terminal_s_nos.add(s_no)
-        if _today_games_complete(today_games, terminal_s_nos):
+        if all(int(game["s_no"]) in terminal_s_nos for game in today_games):
             display.set_waiting("오늘 경기 예측 처리 완료")
             return
         time.sleep(POLL_SECONDS)

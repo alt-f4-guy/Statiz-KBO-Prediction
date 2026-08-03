@@ -238,15 +238,6 @@ class RealtimePredictionTests(unittest.TestCase):
 
         self.assertEqual(_terminal_game_ids(history), {1, 4})
 
-    def test_today_games_complete_requires_every_game_to_be_terminal(self):
-        # 오늘 경기 전체가 완료된 경우에만 추가 폴링 없이 종료할 수 있다.
-        from predict_2026 import _today_games_complete
-
-        games = [{"s_no": 1}, {"s_no": 2}]
-
-        self.assertTrue(_today_games_complete(games, {1, 2}))
-        self.assertFalse(_today_games_complete(games, {1}))
-
     def test_completed_game_progress_restores_offline_result(self):
         # 재시작하면 오프라인 예측 로그의 모델·확률·미제출 상태를 복원한다.
         from predict_2026 import _completed_game_progress
@@ -440,21 +431,6 @@ class RealtimePredictionTests(unittest.TestCase):
         self.assertEqual(record["record_type"], "delivery")
         self.assertEqual(record["api_status"], "success")
         self.assertEqual(saved["record_type"].tolist(), ["delivery"])
-
-    def test_incomplete_lineup_after_start_does_not_wait(self):
-        # 경기 후에는 라인업을 기다리지 않고 대체 확률 계산으로 진행한다.
-        from predict_2026 import _lineup_wait_required
-
-        start = pd.Timestamp("2026-07-28T18:30:00+09:00")
-
-        self.assertFalse(
-            _lineup_wait_required(
-                submit_before_start=False,
-                complete=False,
-                now_utc=start + pd.Timedelta(minutes=30),
-                deadline=start - pd.Timedelta(minutes=30),
-            )
-        )
 
     def test_prediction_window_closes_at_game_start(self):
         # 경기 시작 시각과 그 이후의 신규 예측·전송을 차단한다.

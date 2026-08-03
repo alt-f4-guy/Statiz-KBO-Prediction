@@ -26,7 +26,7 @@ class ModelComparisonTests(unittest.TestCase):
 
     def test_models_must_evaluate_identical_game_ids(self):
         # 서로 다른 경기 집합의 지표를 직접 비교하는 오류를 막는다.
-        from compare_models import ModelComparisonError, assert_same_evaluation_games
+        from compare_models import assert_same_evaluation_games
 
         predictions = pd.DataFrame(
             {
@@ -35,7 +35,7 @@ class ModelComparisonTests(unittest.TestCase):
             }
         )
 
-        with self.assertRaisesRegex(ModelComparisonError, "동일하지 않습니다"):
+        with self.assertRaisesRegex(ValueError, "동일하지 않습니다"):
             assert_same_evaluation_games(predictions)
 
     def test_classifier_is_selected_when_development_metrics_win(self):

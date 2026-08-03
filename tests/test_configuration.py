@@ -5,6 +5,22 @@ from unittest.mock import patch
 
 
 class ConfigurationTests(unittest.TestCase):
+    def test_extract_players_flattens_nested_lineup_payload(self):
+        # API 응답 구조와 무관하게 선수 행만 공통으로 추출해야 한다.
+        from statiz_api import extract_players
+
+        players = extract_players(
+            {
+                "result_cd": 100,
+                "lineup": [
+                    {"p_no": 1, "name": "선수 A"},
+                    {"bench": [{"p_no": 2, "name": "선수 B"}]},
+                ],
+            }
+        )
+
+        self.assertEqual([player["p_no"] for player in players], [1, 2])
+
     def test_missing_api_credentials_fail_before_client_creation(self):
         # 인증값이 하나라도 없으면 네트워크 클라이언트를 만들 수 없어야 한다.
         from pipeline_config import ConfigurationError, load_api_credentials

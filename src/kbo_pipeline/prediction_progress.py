@@ -33,28 +33,6 @@ class GameProgress:
     error_type: str = ""
 
 
-@dataclass(frozen=True)
-class ProgressSummary:
-    total: int
-    completed: int
-    waiting: int
-    failed: int
-
-
-def create_game_progress(
-    s_no: int,
-    matchup: str,
-    start_time: str,
-) -> GameProgress:
-    """새 경기의 초기 표시 상태를 만든다."""
-
-    return GameProgress(
-        s_no=int(s_no),
-        matchup=matchup,
-        start_time=start_time,
-    )
-
-
 def advance_game_progress(
     progress: GameProgress,
     *,
@@ -80,24 +58,6 @@ def advance_game_progress(
     )
 
 
-def summarize_progress(
-    games: Mapping[int, GameProgress],
-) -> ProgressSummary:
-    """경기 상태를 완료·대기·실패로 집계한다."""
-
-    rows = list(games.values())
-    completed = sum(
-        row.delivery in {"성공", "만료", "미제출"} for row in rows
-    )
-    failed = sum(row.delivery == "실패" for row in rows)
-    return ProgressSummary(
-        total=len(rows),
-        completed=completed,
-        waiting=len(rows) - completed - failed,
-        failed=failed,
-    )
-
-
 def build_progress_view(
     preparation: Mapping[str, str],
     games: Mapping[int, GameProgress],
@@ -109,10 +69,12 @@ def build_progress_view(
         f"{name}: {preparation.get(name, '대기')}"
         for name in PREPARATION_STEPS
     )
-    summary = summarize_progress(games)
+    rows = list(games.values())
+    completed = sum(row.delivery in {"성공", "만료", "미제출"} for row in rows)
+    failed = sum(row.delivery == "실패" for row in rows)
     headline = (
-        f"오늘 경기 {summary.total} | 완료 {summary.completed} | "
-        f"대기 {summary.waiting} | 실패 {summary.failed}"
+        f"오늘 경기 {len(rows)} | 완료 {completed} | "
+        f"대기 {len(rows) - completed - failed} | 실패 {failed}"
     )
     if waiting_message:
         headline = f"{headline}\n{waiting_message}"

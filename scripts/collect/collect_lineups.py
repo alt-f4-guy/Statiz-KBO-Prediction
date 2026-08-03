@@ -5,31 +5,13 @@ import pandas as pd
 from tqdm.auto import tqdm
 from pipeline_config import PROJECT_ROOT, RAW_DATA_DIR, load_api_credentials
 from io_utils import atomic_to_csv
-from statiz_api import StatizAPI, StatizAPIError
+from statiz_api import StatizAPI, StatizAPIError, extract_players
 
 # 1. 경로 설정
 RAW_DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 print(f"프로젝트 루트: {PROJECT_ROOT}")
 print(f"데이터 저장 경로: {RAW_DATA_DIR}")
-
-def extract_players(data):
-    extracted = []
-    if isinstance(data, list):
-        for item in data:
-            if isinstance(item, dict) and 'p_no' in item:
-                extracted.append(item)
-            else:
-                extracted.extend(extract_players(item))
-    elif isinstance(data, dict):
-        for k, v in data.items():
-            if k in ['result_cd', 'result_msg', 'update_time']: continue
-            if isinstance(v, list):
-                for item in v:
-                    if isinstance(item, dict) and 'p_no' in item: extracted.append(item)
-            elif isinstance(v, dict):
-                extracted.extend(extract_players(v))
-    return extracted
 
 def run_collection():
     credentials = load_api_credentials()
